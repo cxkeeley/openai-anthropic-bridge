@@ -98,5 +98,5 @@ if [ -n "$DEBUG" ]; then
     uvicorn fastapi_bridge:app --host "$HOST" --port "$PORT" --reload
 else
     # Use the embedded runner in the script
-    python fastapi_bridge.py
+    python3 fastapi_bridge.py
 fi
