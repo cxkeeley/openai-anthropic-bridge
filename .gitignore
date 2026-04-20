@@ -1,0 +1,10 @@
+# Secrets
+.env
+
+# Logs
+*.log
+bridge.log
+
+# Python
+__pycache__/
+*.pyc
