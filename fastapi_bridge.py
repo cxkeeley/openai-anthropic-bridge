@@ -60,168 +60,263 @@ def sanitize_path(path: Any) -> str:
     return p
 
 def repair_syntax(content: str, is_fragment: bool = False) -> str:
-    """Pro-grade stack-based syntax repair: handles template literals and balances brackets."""
-    if not content: return content
+    """Pro-grade stack-based syntax repair: scope-aware architecture for f-strings, template literals and brackets.
     
+    Uses a scope stack where each frame tracks its own open brackets, cleanly
+    separating string scopes from code scopes to fix nested f-string bracket tracking.
+    """
+    if not content: return content
     orig_content = content
-    pairs = {'{': '}', '[': ']', '(': ')', '${': '}', '`': '`'}
-    stack = []
-    in_string = None
+
+    # Scope frame types: 'code', 'string', 'fstring', 'template', 'template_expr'
+    # Each frame has 'type' and 'brackets' (list of unclosed opening brackets in that scope).
+    # String/fstring frames also have 'quote'.
+    scope_stack = [{'type': 'code', 'brackets': []}]
+
     in_comment = None
     escaped = False
-    
     result_chars = []
     i = 0
+
+    pairs = {'{': '}', '[': ']', '(': ')'}
+    pairs_rev = {v: k for k, v in pairs.items()}
+
+    def current_scope():
+        return scope_stack[-1]
+
+    def in_string_scope():
+        return current_scope()['type'] in ('string', 'fstring', 'template', 'template_expr')
+
+    def find_bracket_in_scope(close_char):
+        open_char = pairs_rev.get(close_char)
+        brackets = current_scope()['brackets']
+        for idx in range(len(brackets) - 1, -1, -1):
+            if brackets[idx] == open_char:
+                return idx
+        return -1
+
     while i < len(content):
         char = content[i]
         next_char = content[i+1] if i + 1 < len(content) else ""
-        
-        # Semicolon heuristic: Force close hanging template expressions (only if not in a string already)
-        # Semicolon heuristic: Auto-close hanging template expressions at statement end
-        if char == ';' and (in_string is None or in_string == '`') and not in_comment and stack:
-            # If we are inside a ${} or similar hanging state, unwind it
-            found_template = False
-            for idx in range(len(stack) - 1, -1, -1):
-                if stack[idx] == '${':
-                    found_template = True
-                    break
-            
-            if found_template:
-                logger.info("HEURISTIC: Closing hanging expressions at semicolon")
-                while stack and stack[-1] in ['${', '`', '(', '[']:
-                    opening = stack.pop()
-                    c_char = pairs.get(opening)
-                    if c_char:
-                        result_chars.append(c_char)
-                in_string = None
 
+        # Escape handling
         if escaped:
             result_chars.append(char); escaped = False; i += 1; continue
         if char == '\\':
             result_chars.append(char); escaped = True; i += 1; continue
-            
-        # Comment handling
-        if not in_string:
+
+        # Comment handling (code scope only)
+        if not in_string_scope():
             if not in_comment:
-                if char == '/' and next_char == '/': 
+                if char == '/' and next_char == '/':
                     in_comment = 'line'; result_chars.extend([char, next_char]); i += 2; continue
-                if char == '/' and next_char == '*': 
+                if char == '/' and next_char == '*':
                     in_comment = 'block'; result_chars.extend([char, next_char]); i += 2; continue
             else:
                 result_chars.append(char)
                 if in_comment == 'line' and char == '\n': in_comment = None
-                elif in_comment == 'block' and char == '*' and next_char == '/': 
+                elif in_comment == 'block' and char == '*' and next_char == '/':
                     result_chars.append(next_char); in_comment = None; i += 2; continue
                 i += 1; continue
 
-        # String and Template Literal Handling
-        if in_string:
-            if char == in_string:
-                if in_string == '`' and stack and stack[-1] == '`':
-                    stack.pop()
-                in_string = None
-                result_chars.append(char)
-            elif in_string == '`' and char == '$' and next_char == '{':
-                # Nested expression in template literal
-                stack.append('`') 
-                stack.append('${')
-                in_string = None
-                result_chars.extend([char, next_char])
-                i += 2; continue
-            else:
-                result_chars.append(char)
-            i += 1; continue
-        
-        # Keyword heuristic for else: if we see 'else' and last block was an 'if' without '}'
-        if char == 'e' and content[i:i+5] == 'else ' and not in_string and not in_comment:
-            if stack and stack[-1] == '{':
-                # Peek back for 'if' (crude but effective)
+        scope = current_scope()
+
+        # ---- Simple string scope ----
+        if scope['type'] == 'string':
+            if char == scope['quote']:
+                scope_stack.pop()
+            result_chars.append(char); i += 1; continue
+
+        # ---- F-string scope ----
+        if scope['type'] == 'fstring':
+            if char == scope['quote']:
+                # Close any open inner brackets first, then close the quote
+                while scope['brackets']:
+                    ob = scope['brackets'].pop()
+                    cb = pairs.get(ob, '}')
+                    result_chars.append(cb)
+                    logger.info(f"REPAIR: Closing truncated f-string bracket '{ob}' -> '{cb}'")
+                scope_stack.pop()
+                result_chars.append(char); i += 1; continue
+
+            if char == '{':
+                if next_char == '{':  # escaped {{
+                    result_chars.extend(['{', '{']); i += 2; continue
+                scope['brackets'].append('{')
+                result_chars.append(char); i += 1; continue
+
+            if char == '}':
+                if next_char == '}':  # escaped }}
+                    result_chars.extend(['}', '}']); i += 2; continue
+                if scope['brackets']:
+                    scope['brackets'].pop()
+                result_chars.append(char); i += 1; continue
+
+            # Inner function call brackets within f-string expr
+            if char in pairs:
+                scope['brackets'].append(char)
+                result_chars.append(char); i += 1; continue
+
+            if char in pairs_rev:
+                idx = find_bracket_in_scope(char)
+                if idx != -1:
+                    while len(scope['brackets']) > idx + 1:
+                        ob = scope['brackets'].pop()
+                        result_chars.append(pairs.get(ob, '}'))
+                    scope['brackets'].pop()
+                result_chars.append(char); i += 1; continue
+
+            result_chars.append(char); i += 1; continue
+
+        # ---- Template literal scope ----
+        if scope['type'] == 'template':
+            if char == '`':
+                scope_stack.pop()
+                result_chars.append(char); i += 1; continue
+            if char == '$' and next_char == '{':
+                scope_stack.append({'type': 'template_expr', 'brackets': []})
+                result_chars.extend(['$', '{']); i += 2; continue
+            result_chars.append(char); i += 1; continue
+
+        # ---- Template expression scope (${...}) ----
+        if scope['type'] == 'template_expr':
+            if char == '}':
+                while scope['brackets']:
+                    ob = scope['brackets'].pop()
+                    result_chars.append(pairs.get(ob, '}'))
+                scope_stack.pop()
+                result_chars.append(char); i += 1; continue
+
+            if char == ';':
+                # Semicolon heuristic: force-close hanging template expr
+                logger.info("HEURISTIC: Closing hanging template expression at semicolon")
+                while scope['brackets']:
+                    ob = scope['brackets'].pop()
+                    result_chars.append(pairs.get(ob, '}'))
+                scope_stack.pop()
+                result_chars.append('}')
+                # Also close the backtick (resume string display)
+                if scope_stack and scope_stack[-1]['type'] == 'template':
+                    scope_stack.pop()
+                    result_chars.append('`')
+                i += 1; continue
+
+            if char in pairs:
+                scope['brackets'].append(char)
+                result_chars.append(char); i += 1; continue
+
+            if char in pairs_rev:
+                idx = find_bracket_in_scope(char)
+                if idx != -1:
+                    while len(scope['brackets']) > idx + 1:
+                        ob = scope['brackets'].pop()
+                        result_chars.append(pairs.get(ob, '}'))
+                    scope['brackets'].pop()
+                result_chars.append(char); i += 1; continue
+
+            result_chars.append(char); i += 1; continue
+
+        # ---- Code scope ----
+
+        # Keyword heuristic: close unclosed 'if' before 'else'
+        if char == 'e' and content[i:i+5] == 'else ' and not in_comment:
+            if scope['brackets'] and scope['brackets'][-1] == '{':
                 snippet = "".join(result_chars[-50:]).strip()
                 if 'if' in snippet and not snippet.endswith('}'):
                     logger.info("HEURISTIC: Closing unclosed 'if' block before 'else'")
-                    stack.pop()
+                    scope['brackets'].pop()
                     result_chars.append('}')
 
-        # Outside string/comment
-        if char in ["'", '"', '`']:
-            in_string = char
-            if char == '`':
-                stack.append('`')
-            result_chars.append(char)
-        elif char in pairs:
-            stack.append(char)
-            result_chars.append(char)
-        elif char in pairs.values():
-            if stack:
-                # Look for a match deeper in the stack
-                found_idx = -1
-                for idx in range(len(stack) - 1, -1, -1):
-                    if pairs.get(stack[idx]) == char:
-                        found_idx = idx
-                        break
-                
-                if found_idx != -1:
-                    # Unwind the stack to this match
-                    while len(stack) > found_idx + 1:
-                        opening = stack.pop()
-                        c_char = pairs.get(opening)
-                        if c_char:
-                            logger.info(f"UNWIND REPAIR: Auto-closing '{opening}' with '{c_char}' to match deeper '{char}'")
-                            result_chars.append(c_char)
-                            if opening == '${' and stack and stack[-1] == '`':
-                                stack.pop()
-                                logger.info("UNWIND REPAIR: Also auto-closing template backtick '`'")
-                                result_chars.append('`')
-                    
-                    # Now pop the matching one
-                    opening = stack.pop()
-                    result_chars.append(char)
-                    if opening == '${':
-                        if stack and stack[-1] == '`':
-                            stack.pop()
-                            in_string = '`'
-                else:
-                    logger.info(f"STRAY BRACKET: Found '{char}' with no match in stack. Keeping it.")
-                    result_chars.append(char)
-            else:
-                logger.info(f"STRAY BRACKET: Found '{char}' with empty stack. Keeping it.")
-                result_chars.append(char)
-        else:
-            result_chars.append(char)
-        i += 1
-    
-    repaired = "".join(result_chars)
-    
-    # Close any unclosed strings or template expressions
-    if in_string:
-        logger.info(f"REPAIR: Closing unclosed string {in_string}")
-        repaired += in_string
+        # String opening
+        if char in ["'", '"']:
+            prev = content[i-1].lower() if i > 0 else ''
+            stype = 'fstring' if prev == 'f' else 'string'
+            scope_stack.append({'type': stype, 'quote': char, 'brackets': []})
+            result_chars.append(char); i += 1; continue
 
-    # Balance remaining stack
-    if stack:
+        if char == '`':
+            scope_stack.append({'type': 'template', 'brackets': []})
+            result_chars.append(char); i += 1; continue
+
+        # Opening bracket
+        if char in pairs:
+            scope['brackets'].append(char)
+            result_chars.append(char); i += 1; continue
+
+        # Closing bracket
+        if char in pairs_rev:
+            idx = find_bracket_in_scope(char)
+            if idx != -1:
+                while len(scope['brackets']) > idx + 1:
+                    ob = scope['brackets'].pop()
+                    cb = pairs.get(ob, '}')
+                    logger.info(f"UNWIND REPAIR: Auto-closing '{ob}' with '{cb}'")
+                    result_chars.append(cb)
+                scope['brackets'].pop()
+                result_chars.append(char)
+            else:
+                logger.info(f"STRAY BRACKET: Found '{char}' with no match. Keeping it.")
+                result_chars.append(char)
+            i += 1; continue
+
+        result_chars.append(char)
+        i += 1
+
+    repaired = "".join(result_chars)
+
+    # --- Close unclosed scopes (inner to outer) ---
+    while len(scope_stack) > 1:
+        scope = scope_stack.pop()
+        stype = scope['type']
+
+        if stype == 'string':
+            logger.info(f"REPAIR: Closing unclosed string {scope['quote']}")
+            repaired += scope['quote']
+
+        elif stype == 'fstring':
+            closing = ""
+            while scope['brackets']:
+                ob = scope['brackets'].pop()
+                closing += pairs.get(ob, '}')
+            closing += scope['quote']
+            logger.info(f"REPAIR: Closing f-string with: {repr(closing)}")
+            repaired += closing
+
+        elif stype == 'template':
+            logger.info("REPAIR: Closing unclosed template literal")
+            repaired += '`'
+
+        elif stype == 'template_expr':
+            logger.info("REPAIR: Closing unclosed template expression")
+            while scope['brackets']:
+                ob = scope['brackets'].pop()
+                repaired += pairs.get(ob, '}')
+            repaired += '}'  # closing ` handled by outer template scope
+
+    # --- Close remaining outer code brackets ---
+    outer = scope_stack[0]
+    if outer['brackets']:
         if is_fragment:
-            logger.info(f"FRAGMENT DETECTED: Stack has {len(stack)} items left, but skipping full balance for fragment.")
+            logger.info(f"FRAGMENT DETECTED: {len(outer['brackets'])} unclosed brackets, skipping repair.")
         else:
             repaired = repaired.rstrip()
             closing = ""
-            while stack:
-                opening = stack.pop()
-                if opening == '`': continue 
-                c_char = pairs.get(opening)
-                if not c_char: continue
-                
-                if c_char == '}' and not closing.startswith('\n'): 
-                    closing = '\n' + '}' + closing
-                else: 
-                    closing = c_char + closing
-            
+            while outer['brackets']:
+                ob = outer['brackets'].pop()
+                cb = pairs.get(ob, '}')
+                if cb == '}' and not closing.startswith('\n'):
+                    closing = '\n}' + closing
+                else:
+                    closing = cb + closing
             if closing:
-                logger.info(f"REPAIR: Appending balanced brackets: {closing.replace('\n', '\\n')}")
+                closing_display = closing.replace('\n', '\\n')
+                logger.info(f"REPAIR: Appending balanced brackets: {closing_display}")
                 repaired += closing
-    
+
     if repaired != orig_content:
         logger.info(f"REPAIR ACTION: content modified by sanitizer (Length: {len(orig_content)} -> {len(repaired)})")
     return repaired
+
 
 def extract_truncated_value(raw: str, key: str) -> Optional[str]:
     """Manually extracts key values from malformed or truncated JSON strings."""
