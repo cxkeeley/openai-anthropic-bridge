@@ -364,6 +364,13 @@ def robust_parse_args(raw: str) -> dict:
                 # Treat new_string and ReplacementContent as fragments to avoid over-balancing
                 is_frag = k in ['new_string', 'ReplacementContent']
                 args[k] = repair_syntax(args[k], is_fragment=is_frag)
+
+    # --- Hallucination Shield (Fix for Claude Code Task tools) ---
+    # Qwen often adds "status": "in_progress" to TaskUpdate/TaskCreate, which causes validation errors.
+    if "status" in args and any(x in str(args.get("activeForm", "")) + str(args.get("description", "")) for x in ["Task", "task"]):
+        logger.info(f"SHIELD: Stripping hallucinated 'status' field from Task tool call.")
+        del args["status"]
+
     return args
 
 class SSEParser:
@@ -456,6 +463,10 @@ def merge_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
 @app.post("/v1/messages")
 async def proxy_handler(request: Request):
     try:
@@ -464,13 +475,49 @@ async def proxy_handler(request: Request):
         raw_msgs = []
         for msg in body.get("messages", []):
             role, content = msg.get("role"), msg.get("content")
+            
+            # 1. Handle Assistant Tool Calls (History)
+            if role == "assistant" and isinstance(content, list):
+                text_content = "".join(b["text"] for b in content if b.get("type") == "text")
+                tool_calls = []
+                for b in content:
+                    if b.get("type") == "tool_use":
+                        tool_calls.append({
+                            "id": b["id"],
+                            "type": "function",
+                            "function": {"name": b["name"], "arguments": json.dumps(b["input"])}
+                        })
+                msg_to_add = {"role": "assistant", "content": text_content or None}
+                if tool_calls: msg_to_add["tool_calls"] = tool_calls
+                raw_msgs.append(msg_to_add)
+                continue
+
+            # 2. Handle User Tool Results & Multi-part Content
             if role == "user" and isinstance(content, list):
                 for b in content:
                     if b.get("type") == "tool_result":
-                        raw_msgs.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": str(b.get("content", ""))})
+                        # Handle multi-part tool results (extract text)
+                        c_val = b.get("content", "")
+                        if isinstance(c_val, list):
+                            c_val = "\n".join(part.get("text", "") for part in c_val if part.get("type") == "text")
+                        
+                        # Report errors properly to the model
+                        if b.get("is_error"):
+                            c_val = f"Error: {c_val}"
+                            
+                        raw_msgs.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": str(c_val)})
                     elif b.get("type") == "text":
                         raw_msgs.append({"role": "user", "content": b["text"]})
+                    elif b.get("type") == "image":
+                        raw_msgs.append({
+                            "role": "user", 
+                            "content": [
+                                {"type": "text", "text": "[Attached Image]"},
+                                {"type": "image_url", "image_url": {"url": f"data:{b['source']['media_type']};base64,{b['source']['data']}"}}
+                            ]
+                        })
                 continue
+            
             if isinstance(content, list):
                 content = "".join(b["text"] for b in content if b.get("type") == "text")
             raw_msgs.append({"role": role, "content": content})
@@ -481,10 +528,12 @@ async def proxy_handler(request: Request):
         messages.insert(0, {"role": "system", "content": f"{sys_p}\n\nCRITICAL: Use NATIVE tool calls ONLY. Never output tool calls as text like 'ToolName({...})'. Always use the provided tool-calling functionality."})
 
         tools_reg = body.get("tools", [])
+        logger.info(f"FULL MESSAGE HISTORY (to Jiutian):\n{json.dumps(messages, indent=2)}")
         payload = {
             "model": MODEL_NAME, "stream": True, "temperature": 0.0, "messages": messages,
             "tools": [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in tools_reg] if tools_reg else None
         }
+
 
         logger.debug(f"Payload to Jiutian: {json.dumps(payload, indent=2)}")
 
@@ -493,6 +542,7 @@ async def proxy_handler(request: Request):
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": f"msg_br_{int(time.time())}", "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
 
             router, block_idx, text_started, active_tools, full_text, finish_reason = IntentRouter(tools_reg), 0, False, {}, "", None
+            usage = {"input_tokens": 0, "output_tokens": 0}
 
             # connect_timeout=30s, read_timeout=120s — kills dead/stalled streams
             _timeout = httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0)
@@ -517,6 +567,12 @@ async def proxy_handler(request: Request):
                                 try:
                                     logger.debug(f"Raw Chunk: {data_str}")
                                     data = json.loads(data_str)
+                                    
+                                    # Capture usage if available
+                                    if data.get("usage"):
+                                        usage["input_tokens"] = data["usage"].get("prompt_tokens", usage["input_tokens"])
+                                        usage["output_tokens"] = data["usage"].get("completion_tokens", usage["output_tokens"])
+
                                     choice = data.get("choices", [{}])[0]
                                     delta = choice.get("delta", {})
                                     if choice.get("finish_reason"): finish_reason = choice["finish_reason"]
@@ -581,8 +637,8 @@ async def proxy_handler(request: Request):
                     block_idx += 1; active_tools[f"synth_{i}"] = {"id": tid}
 
             stop = "tool_use" if (finish_reason in ["tool_calls", "function_call"] or active_tools) else "end_turn"
-            logger.info(f"Request Finished. Stop Reason: {stop}")
-            yield f'event: message_delta\ndata: {json.dumps({"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None}, "usage": {"output_tokens": 0}})}\n\n'
+            logger.info(f"Request Finished. Stop Reason: {stop} | Usage: {usage}")
+            yield f'event: message_delta\ndata: {json.dumps({"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None}, "usage": {"output_tokens": usage["output_tokens"]}})}\n\n'
             yield f'event: message_stop\ndata: {json.dumps({"type": "message_stop"})}\n\n'
 
         return StreamingResponse(stream_gen(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
