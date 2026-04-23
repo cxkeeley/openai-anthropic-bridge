@@ -10,6 +10,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- 1. System Resilience (Windows Optimization) ---
 def setup_windows_console():
@@ -61,7 +64,7 @@ def sanitize_path(path: Any) -> str:
 
 def repair_syntax(content: str, is_fragment: bool = False) -> str:
     """Pro-grade stack-based syntax repair: scope-aware architecture for f-strings, template literals and brackets.
-    
+
     Uses a scope stack where each frame tracks its own open brackets, cleanly
     separating string scopes from code scopes to fix nested f-string bracket tracking.
     """
@@ -349,11 +352,11 @@ def robust_parse_args(raw: str) -> dict:
         for k in ['file_path', 'path', 'content', 'text', 'new_string', 'command', 'description']:
             val = extract_truncated_value(raw, k)
             if val is not None: args[k] = val
-    
+
     # Post-processing
     for k in ['file_path', 'path']:
         if k in args: args[k] = sanitize_path(args[k])
-    
+
     # Apply syntax repair to code-related fields if enabled
     if JTIU_REPAIR_SYNTAX:
         for k in ['content', 'text', 'new_string', 'ReplacementContent', 'CodeContent']:
@@ -391,7 +394,7 @@ class IntentRouter:
             if content:
                 fname = sanitize_path(self.detect_filename(text[:match.start()]))
                 intents.append(("write_to_file", {"TargetFile": fname, "CodeContent": content, "Overwrite": True, "Description": "Hallucinated write from markdown block"}))
-        
+
         # 2. Detect ToolName({...}) patterns
         patterns = [
             (r'Bash\s*\(\s*({.*?})\s*\)', 'run_command'),
@@ -400,13 +403,13 @@ class IntentRouter:
             (r'Edit\s*\(\s*({.*?})\s*\)', 'replace_file_content'),
             (r'Update\s*\(\s*({.*?})\s*\)', 'replace_file_content'),
         ]
-        
+
         for pattern, native_name in patterns:
             for match in re.finditer(pattern, text, re.DOTALL):
                 try:
                     raw_args = match.group(1)
                     args = robust_parse_args(raw_args)
-                    
+
                     # Map arguments to native names
                     mapped_args = {}
                     if native_name == "run_command":
@@ -425,7 +428,7 @@ class IntentRouter:
                             "StartLine": 1,
                             "EndLine": 500 # Default range
                         }
-                    
+
                     if mapped_args:
                         intents.append((native_name, mapped_args))
                 except: continue
@@ -482,7 +485,7 @@ async def proxy_handler(request: Request):
             "model": MODEL_NAME, "stream": True, "temperature": 0.0, "messages": messages,
             "tools": [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in tools_reg] if tools_reg else None
         }
-        
+
         logger.debug(f"Payload to Jiutian: {json.dumps(payload, indent=2)}")
 
         async def stream_gen():
@@ -491,7 +494,9 @@ async def proxy_handler(request: Request):
 
             router, block_idx, text_started, active_tools, full_text, finish_reason = IntentRouter(tools_reg), 0, False, {}, "", None
 
-            async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=None) as client:
+            # connect_timeout=30s, read_timeout=120s — kills dead/stalled streams
+            _timeout = httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0)
+            async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=_timeout) as client:
                 try:
                     async with client.stream("POST", TARGET_URL, json=payload, headers=headers) as resp:
                         if resp.status_code != 200:
@@ -501,10 +506,13 @@ async def proxy_handler(request: Request):
                             return
 
                         parser = SSEParser()
+                        done = False
                         async for chunk in resp.aiter_bytes():
+                            if done: break
                             for data_str in parser.feed(chunk):
-                                if data_str == "[DONE]": 
+                                if data_str == "[DONE]":
                                     logger.debug("SSE Stream: [DONE] received")
+                                    done = True
                                     break
                                 try:
                                     logger.debug(f"Raw Chunk: {data_str}")
@@ -530,30 +538,32 @@ async def proxy_handler(request: Request):
                                             active_tools[idx] = {"id": tc.get("id") or f"call_{time.time_ns()}", "name": "", "args": "", "block_idx": block_idx}
                                             block_idx += 1
                                             logger.info(f"Tool Call Started: idx={idx} id={active_tools[idx]['id']}")
-                                        
+
                                         info = active_tools[idx]
-                                        if tc.get("function", {}).get("name"): 
+                                        if tc.get("function", {}).get("name"):
                                             info["name"] += tc["function"]["name"]
                                             logger.debug(f"Tool Name Update: {info['name']}")
-                                        if tc.get("function", {}).get("arguments"): 
+                                        if tc.get("function", {}).get("arguments"):
                                             info["args"] += tc["function"]["arguments"]
                                             logger.debug(f"Tool Args Update (accumulated): {info['args']}")
                                 except Exception as e:
                                     logger.error(f"Chunk processing error: {e}")
+                except httpx.ReadTimeout:
+                    logger.error("Stream Timeout: Upstream stopped sending data (read_timeout exceeded). Flushing what was collected.")
                 except Exception as e:
                     logger.error(f"Stream Exception: {e}")
                     yield f'event: error\ndata: {json.dumps({"type": "error", "error": {"type": "api_error", "message": f"Bridge Stream Loss: {str(e)}"}})}\n\n'
 
             if text_started:
                 yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
-            
+
             # Emit Native Tools
             for t_idx, info in sorted(active_tools.items()):
                 if not info["name"]: continue
                 logger.info(f"Finalizing Native Tool: {info['name']}")
                 args = robust_parse_args(info["args"])
                 logger.info(f"Final Repaired Args for {info['name']}: {json.dumps(args, indent=2)}")
-                
+
                 yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": info["id"], "name": info["name"], "input": {}}})}\n\n'
                 yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": json.dumps(args, ensure_ascii=False)}})}\n\n'
                 yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": info["block_idx"]})}\n\n'
