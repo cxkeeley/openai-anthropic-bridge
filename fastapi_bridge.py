@@ -1,13 +1,14 @@
 import os
 import json
 import logging
+import logging.handlers
 import httpx
 import re
 import time
 import sys
 import ctypes
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
@@ -26,7 +27,7 @@ def setup_windows_console():
         if ctypes.windll.kernel32.AttachConsole(-1):
             sys.stdout = open("CONOUT$", "w", encoding="utf-8")
             sys.stderr = open("CONOUT$", "w", encoding="utf-8")
-    except: pass
+    except Exception: pass
     if sys.stdout is None: sys.stdout = NullWriter()
     if sys.stderr is None: sys.stderr = NullWriter()
 
@@ -34,7 +35,10 @@ setup_windows_console()
 
 # --- 2. Logging Setup (Verbose Debugging) ---
 log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
-file_handler = logging.FileHandler("bridge.log", encoding='utf-8')
+# Rotating file handler: max 10MB per file, keep 3 backups — prevents disk exhaustion
+file_handler = logging.handlers.RotatingFileHandler(
+    "bridge.log", maxBytes=10*1024*1024, backupCount=3, encoding='utf-8'
+)
 file_handler.setFormatter(log_formatter)
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
@@ -365,12 +369,6 @@ def robust_parse_args(raw: str) -> dict:
                 is_frag = k in ['new_string', 'ReplacementContent']
                 args[k] = repair_syntax(args[k], is_fragment=is_frag)
 
-    # --- Hallucination Shield (Fix for Claude Code Task tools) ---
-    # Qwen often adds "status": "in_progress" to TaskUpdate/TaskCreate, which causes validation errors.
-    if "status" in args and any(x in str(args.get("activeForm", "")) + str(args.get("description", "")) for x in ["Task", "task"]):
-        logger.info(f"SHIELD: Stripping hallucinated 'status' field from Task tool call.")
-        del args["status"]
-
     return args
 
 class SSEParser:
@@ -433,7 +431,7 @@ class IntentRouter:
                             "Description": "Hallucinated edit",
                             "AllowMultiple": False,
                             "StartLine": 1,
-                            "EndLine": 500 # Default range
+                            "EndLine": 99999  # Large bound — covers files of any size
                         }
 
                     if mapped_args:
@@ -446,7 +444,8 @@ def merge_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not messages: return []
     merged = []
     for msg in messages:
-        if merged and merged[-1]["role"] == msg["role"]:
+        # NEVER merge 'tool' messages - each needs its own tool_call_id
+        if merged and merged[-1]["role"] == msg["role"] and msg["role"] != "tool":
             e, n = merged[-1]["content"], msg["content"]
             if isinstance(e, str) and isinstance(n, str):
                 merged[-1]["content"] = e + "\n\n" + n
@@ -456,12 +455,18 @@ def merge_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 e_list = e if isinstance(e, list) else [{"type": "text", "text": str(e)}]
                 n_list = n if isinstance(n, list) else [{"type": "text", "text": str(n)}]
                 merged[-1]["content"] = e_list + n_list
+            # Preserve tool_calls when merging consecutive assistant messages
+            if msg.get("tool_calls"):
+                existing = merged[-1].get("tool_calls", [])
+                merged[-1]["tool_calls"] = existing + msg["tool_calls"]
         else: merged.append(msg)
     return merged
 
 # --- 5. Bridge Server Implementation ---
 app = FastAPI()
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+_cors_origins_raw = os.environ.get("CORS_ORIGINS", "*")
+_cors_origins = [o.strip() for o in _cors_origins_raw.split(",")] if _cors_origins_raw != "*" else ["*"]
+app.add_middleware(CORSMiddleware, allow_origins=_cors_origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/health")
 async def health_check():
@@ -528,14 +533,11 @@ async def proxy_handler(request: Request):
         messages.insert(0, {"role": "system", "content": f"{sys_p}\n\nCRITICAL: Use NATIVE tool calls ONLY. Never output tool calls as text like 'ToolName({...})'. Always use the provided tool-calling functionality."})
 
         tools_reg = body.get("tools", [])
-        logger.info(f"FULL MESSAGE HISTORY (to Jiutian):\n{json.dumps(messages, indent=2)}")
+        logger.debug(f"FULL MESSAGE HISTORY (to Jiutian):\n{json.dumps(messages, indent=2)}")
         payload = {
             "model": MODEL_NAME, "stream": True, "temperature": 0.0, "messages": messages,
             "tools": [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in tools_reg] if tools_reg else None
         }
-
-
-        logger.debug(f"Payload to Jiutian: {json.dumps(payload, indent=2)}")
 
         async def stream_gen():
             headers = {"Authorization": f"Bearer {API_TOKEN}", "Content-Type": "application/json"}
@@ -614,10 +616,17 @@ async def proxy_handler(request: Request):
                 yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
 
             # Emit Native Tools
+            # TaskCreate/read-only tools do NOT accept 'status' — strip it to prevent validation errors.
+            # TaskUpdate DOES accept 'status' (e.g. "completed") — leave it alone.
+            _NO_STATUS_TOOLS = {"TaskCreate", "TaskList", "TaskGet", "TaskOutput"}
             for t_idx, info in sorted(active_tools.items()):
                 if not info["name"]: continue
                 logger.info(f"Finalizing Native Tool: {info['name']}")
                 args = robust_parse_args(info["args"])
+                # Hallucination Shield: only strip 'status' from tools that don't support it
+                if info["name"] in _NO_STATUS_TOOLS and "status" in args:
+                    logger.info(f"SHIELD: Stripping hallucinated 'status' from {info['name']}")
+                    del args["status"]
                 logger.info(f"Final Repaired Args for {info['name']}: {json.dumps(args, indent=2)}")
 
                 yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": info["id"], "name": info["name"], "input": {}}})}\n\n'
@@ -643,8 +652,8 @@ async def proxy_handler(request: Request):
 
         return StreamingResponse(stream_gen(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
     except Exception as e:
-        logger.error(f"Fatal Bridge Error: {e}")
-        return {"error": str(e)}
+        logger.exception(f"Fatal Bridge Error")  # logs full traceback to bridge.log
+        return JSONResponse({"error": "Internal bridge error. Check bridge.log for details."}, status_code=500)
 
 if __name__ == "__main__":
     import uvicorn
