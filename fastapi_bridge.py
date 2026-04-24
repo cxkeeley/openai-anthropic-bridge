@@ -345,7 +345,7 @@ async def proxy_handler(request: Request):
         }
 
         async def stream_gen():
-            msg_id = f"msg_{int(time.time())}"
+            msg_id = f"msg_{uuid.uuid4().hex}"
             input_tokens, output_tokens = 0, 0
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
 
