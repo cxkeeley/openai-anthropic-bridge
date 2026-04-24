@@ -222,7 +222,9 @@ async def proxy_handler(request: Request):
         }
 
         async def stream_gen():
-            yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": f"msg_{int(time.time())}", "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
+            msg_id = f"msg_{int(time.time())}"
+            input_tokens, output_tokens = 0, 0
+            yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
 
             block_idx, text_started, active_tools = 0, False, {}
             async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=httpx.Timeout(600.0)) as client:
@@ -240,6 +242,12 @@ async def proxy_handler(request: Request):
                                 if data_str == "[DONE]": break
                                 try:
                                     data = json.loads(data_str)
+                                    # Capture Usage data if present
+                                    if data.get("usage"):
+                                        u = data["usage"]
+                                        input_tokens = u.get("prompt_tokens", input_tokens)
+                                        output_tokens = u.get("completion_tokens", output_tokens)
+
                                     choice = data.get("choices", [{}])[0]
                                     delta = choice.get("delta", {})
 
@@ -303,7 +311,8 @@ async def proxy_handler(request: Request):
                     yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": info["block_idx"]})}\n\n'
 
             stop = "tool_use" if active_tools else "end_turn"
-            yield f'event: message_delta\ndata: {json.dumps({"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None}, "usage": {"output_tokens": 0}})}\n\n'
+            # Finalize the message with actual usage
+            yield f'event: message_delta\ndata: {json.dumps({"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None}, "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}})}\n\n'
             yield f'event: message_stop\ndata: {json.dumps({"type": "message_stop"})}\n\n'
 
         return StreamingResponse(stream_gen(), media_type="text/event-stream")
