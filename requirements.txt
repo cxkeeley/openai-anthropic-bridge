@@ -1,14 +1,10 @@
-# Required Python packages for the Claude Bridge
-flask>=2.0.0
-requests>=2.25.0
-urllib3>=1.26.0
-
-# Optional: For additional security (recommended for production)
-# certifi>=2020.0.0
-
-# Infrastructure
-python-dotenv>=1.0.0
-gunicorn>=21.2.0
+# Infrastructure & Web Framework
 fastapi>=0.100.0
 uvicorn>=0.22.0
 httpx>=0.24.0
+
+# Environment & Config
+python-dotenv>=1.0.0
+
+# Production Server (Optional for Docker)
+gunicorn>=21.2.0

@@ -34,11 +34,17 @@ def setup_windows_console():
 setup_windows_console()
 
 # --- 2. Logging Setup (Verbose Debugging) ---
+# Bulletproof log path detection
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_PATH = os.path.join(BASE_DIR, "bridge.log")
+
+# Auto-cleanup if Docker/System created a directory named 'bridge.log'
+if os.path.isdir(LOG_PATH):
+    import shutil
+    shutil.rmtree(LOG_PATH)
+
 log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
-# Rotating file handler: max 10MB per file, keep 3 backups — prevents disk exhaustion
-file_handler = logging.handlers.RotatingFileHandler(
-    "bridge.log", maxBytes=10*1024*1024, backupCount=3, encoding='utf-8'
-)
+file_handler = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=10*1024*1024, backupCount=3, encoding='utf-8')
 file_handler.setFormatter(log_formatter)
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
@@ -46,6 +52,7 @@ stream_handler.setFormatter(log_formatter)
 # Set to INFO to avoid flooding, but keep REPAIR actions visible
 logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler])
 logger = logging.getLogger("Bridge")
+logger.info(f"BRIDGE LOGGING TO: {LOG_PATH}")
 logger.info("BRIDGE STARTED - INFO LEVEL ENABLED")
 
 # --- 3. Configuration ---
