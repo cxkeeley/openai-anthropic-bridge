@@ -129,7 +129,11 @@ async def health():
 async def proxy_handler(request: Request):
     try:
         body = await request.json()
-        tools_list = {t["name"].lower(): t["name"] for t in body.get("tools", [])}
+        tools_list = {}
+        for t in body.get("tools", []):
+            tool_name = t.get("name", "")
+            if tool_name:
+                tools_list[tool_name.lower()] = tool_name
 
         raw_msgs = []
         for msg in body.get("messages", []):
@@ -166,7 +170,7 @@ async def proxy_handler(request: Request):
             "stream": True,
             "temperature": body.get("temperature", 0.0),
             "messages": messages,
-            "tools": [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in body.get("tools", [])] if body.get("tools") else None
+            "tools": [{"type": "function", "function": {"name": t.get("name", ""), "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in body.get("tools", [])] if body.get("tools") else None
         }
 
         async def stream_gen():
