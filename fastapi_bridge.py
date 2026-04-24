@@ -5,6 +5,8 @@ import logging.handlers
 import httpx
 import time
 import sys
+import uuid
+import re
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,7 +40,66 @@ MODEL_NAME = os.environ.get("JTIU_MODEL", "")
 SYSTEM_OVERRIDE = os.environ.get("JTIU_SYSTEM_OVERRIDE", "")
 SSL_VERIFY = os.environ.get("JTIU_SSL_VERIFY", "true").lower() == "true"
 
-# --- 3. Core Utility ---
+# Rate Limiting Configuration
+RATE_LIMIT_ENABLED = os.environ.get("JTIU_RATE_LIMIT_ENABLED", "true").lower() == "true"
+RATE_LIMIT_REQUESTS = int(os.environ.get("JTIU_RATE_LIMIT_REQUESTS", "10"))
+RATE_LIMIT_WINDOW = float(os.environ.get("JTIU_RATE_LIMIT_WINDOW", "60.0"))
+
+# --- 3. Rate Limiter ---
+class RateLimiter:
+    """Simple sliding window rate limiter"""
+    def __init__(self, max_requests: int, window_seconds: float):
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self.requests = []
+
+    def is_allowed(self) -> bool:
+        """Check if a request is allowed under the rate limit"""
+        if not RATE_LIMIT_ENABLED:
+            return True
+
+        now = time.time()
+        # Remove old requests outside the window
+        self.requests = [t for t in self.requests if now - t < self.window_seconds]
+
+        if len(self.requests) >= self.max_requests:
+            return False
+
+        self.requests.append(now)
+        return True
+
+    def get_retry_after(self) -> int:
+        """Get the retry-after value in seconds
+        """
+        if not self.requests:
+            return 0
+        oldest = min(self.requests)
+        retry_after = int(self.window_seconds - (time.time() - oldest))
+        return max(1, retry_after)
+
+# Global rate limiter instance
+rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW)
+
+# --- 4. Core Utility ---
+def validate_tool_call_id(tool_call_id: str) -> bool:
+    """
+    Validate that a tool call ID matches the expected format.
+    Expected format: 'call_' followed by alphanumeric characters, underscores, hyphens, and dots
+    """
+    if not tool_call_id:
+        return False
+    # Claude/Anthropic tool call IDs typically start with 'call_' followed by alphanumeric chars
+    pattern = r'^call_[a-zA-Z0-9_-]+$'
+    return bool(re.match(pattern, tool_call_id))
+
+
+def generate_tool_call_id(idx: int) -> str:
+    """
+    Generate a valid tool call ID that matches expected format
+    """
+    return f"call_{uuid.uuid4().hex}_{idx}"
+
+
 def robust_parse_args(raw: str) -> dict:
     if not raw: return {}
     
@@ -171,11 +232,73 @@ async def root():
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    # Rate limiting check for health endpoint
+    if not rate_limiter.is_allowed():
+        retry_after = rate_limiter.get_retry_after()
+        logger.warning(f"Rate limit exceeded for health check. Retry after: {retry_after} seconds")
+        return JSONResponse(
+            {"error": {"message": "Rate limit exceeded", "code": "rate_limit_exceeded"}},
+            status_code=429,
+            headers={"Retry-After": str(retry_after)}
+        )
+
+    # Health check with upstream connectivity check
+    health_status = {"status": "ok", "bridge": "openai-anthropic", "model": MODEL_NAME}
+    upstream_status = "unknown"
+    upstream_latency_ms = None
+
+    if TARGET_URL:
+        try:
+            import asyncio
+            import httpx
+
+            async def check_upstream():
+                async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=httpx.Timeout(5.0)) as client:
+                    start_time = time.time()
+                    try:
+                        resp = await client.get(TARGET_URL)
+                        latency_ms = (time.time() - start_time) * 1000
+                        upstream_status = "ok" if resp.status_code < 500 else "error"
+                        upstream_latency_ms = latency_ms
+                    except Exception as e:
+                        upstream_status = "error"
+                        logger.warning(f"Upstream health check failed: {e}")
+                    return upstream_status, upstream_latency_ms
+
+            # Run async health check
+            loop = asyncio.new_event_loop()
+            try:
+                upstream_status, upstream_latency_ms = loop.run_until_complete(check_upstream())
+            finally:
+                loop.close()
+        except Exception as e:
+            upstream_status = "error"
+            logger.warning(f"Health check error: {e}")
+    else:
+        upstream_status = "not_configured"
+        logger.info("Upstream URL not configured, skipping upstream health check")
+
+    health_status["upstream"] = {
+        "status": upstream_status,
+        "latency_ms": upstream_latency_ms
+    }
+
+    status_code = 200 if upstream_status == "ok" else 503
+    return JSONResponse(health_status, status_code=status_code)
 
 @app.post("/v1/messages")
 async def proxy_handler(request: Request):
     try:
+        # Rate limiting check
+        if not rate_limiter.is_allowed():
+            retry_after = rate_limiter.get_retry_after()
+            logger.warning(f"Rate limit exceeded. Retry after: {retry_after} seconds")
+            return JSONResponse(
+                {"error": {"message": "Rate limit exceeded", "code": "rate_limit_exceeded"}},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)}
+            )
+
         body = await request.json()
         tools_list = {}
         for t in body.get("tools", []):
@@ -279,7 +402,7 @@ async def proxy_handler(request: Request):
                                             arg_chunk = tc["function"]["arguments"]
                                             if not info["started"] and info["name"]:
                                                 native_name = tools_list.get(info["name"].lower(), info["name"])
-                                                yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": info["id"] or f"call_{int(time.time())}_{idx}", "name": native_name, "input": {}}})}\n\n'
+                                                yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": generate_tool_call_id(idx), "name": native_name, "input": {}}})}\n\n'
                                                 info["started"] = True
                                             info["args"] += arg_chunk
                                             yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": arg_chunk}})}\n\n'
