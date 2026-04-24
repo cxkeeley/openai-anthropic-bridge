@@ -117,6 +117,14 @@ def merge_messages(messages: List[Dict[Any, Any]]) -> List[Dict[Any, Any]]:
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+@app.get("/")
+async def root():
+    return {"status": "online", "bridge": "openai-anthropic", "model": MODEL_NAME}
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 @app.post("/v1/messages")
 async def proxy_handler(request: Request):
     try:

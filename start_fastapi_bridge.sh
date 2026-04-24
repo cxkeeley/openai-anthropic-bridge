@@ -3,8 +3,16 @@
 # Default values
 DEFAULT_HOST="127.0.0.1"
 DEFAULT_PORT="8000"
-DEFAULT_TARGET_URL="https://ai.asix.id/kunlun/ingress/api-safe/5351ea/a95e59932d094883945ed08ab2a1f6bc/ai-4f4f1bee55324e7382a864176dbdd8da/service-2c125598e6b543c8a8859570f5688811/v1/chat/completions"
-DEFAULT_TOKEN="eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJlNGRhM2EzN2FmOGY0ZGQxYTU3N2RhNzU1MTQyMzc3YSIsImlzcyI6ImFwaS1hdXRoLWtleSIsImV4cCI6NDkyNzUxMDU0NX0.iVRE-7MW9KhKbBMSVUdm79DC5prAf7xpHHt9GB5rvVGXYy0IL5mkZqkn1JdLXiYMXkBt0OXKkzkOo-4tJ3NpoEiIjNU150lg3821eSqPwD3uILoHhQW0K1LShIAgiPplviAoAZFsvD_Hmg9kMha7ziKNW1KmJH_54-_DPSbv4QGSe4ZY41snjj4960AmmVrg4u94c1PHIJBOzfphaVuN7MLrjV3EVVZ3ySwjE4hqpHxn6D4_GAuJ6eTdHuUEWblvnKKr__aKali3d95UPmB1K6QxeGyfZcprgn3rJtLIsWwTudcNm1yGWags0MFp2D79YvjzX3QNPv6nAANrulm3eg"
+DEFAULT_TARGET_URL="http://localhost:11434/v1/chat/completions"
+DEFAULT_TOKEN="sk-your-token-here"
+
+# Load .env file if it exists
+if [ -f .env ]; then
+    echo "Loading configuration from .env..."
+    set -a
+    source .env
+    set +a
+fi
 
 # Function to display usage
 show_usage() {
@@ -66,7 +74,6 @@ PORT=${JTIU_PORT:-${PORT:-$DEFAULT_PORT}}
 TARGET_URL=${JTIU_TARGET_URL:-${TARGET_URL:-$DEFAULT_TARGET_URL}}
 TOKEN=${JTIU_TOKEN:-${TOKEN:-$DEFAULT_TOKEN}}
 MODEL=${JTIU_MODEL:-${MODEL:-jt_indonesia}}
-REPAIR_SYNTAX=${JTIU_REPAIR_SYNTAX:-${REPAIR_SYNTAX:-true}}
 
 # Export for the application
 export JTIU_TARGET_URL="$TARGET_URL"
@@ -74,7 +81,6 @@ export JTIU_TOKEN="$TOKEN"
 export JTIU_MODEL="$MODEL"
 export JTIU_HOST="$HOST"
 export JTIU_PORT="$PORT"
-export JTIU_REPAIR_SYNTAX="$REPAIR_SYNTAX"
 
 # Display configuration
 echo "==================================================="
