@@ -349,7 +349,7 @@ async def proxy_handler(request: Request):
             input_tokens, output_tokens = 0, 0
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
 
-            block_idx, text_started, active_tools = 0, False, {}
+            block_idx, text_started, active_tools, tool_results = 0, False, {}, []
             async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=httpx.Timeout(600.0)) as client:
                 try:
                     async with client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:

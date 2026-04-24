@@ -7,7 +7,7 @@
 - **Description**: Add proper tool result streaming with `tool_result` event type
 - **Current State**: Tool results are merged into messages but not streamed separately
 - **Required**: Stream tool results as they complete with proper `tool_result` event type
-- **Status**: ⚠️ **PENDING** - Tool results are merged into messages but not streamed separately. This is a medium priority item that can be addressed later.
+- **Status**: ✅ **COMPLETED** - Tool result streaming is now implemented. The bridge streams tool results as they complete with proper `tool_result` event type. Tool results are parsed from upstream responses and streamed separately before the final message delta event.
 
 ### 2. Usage Tracking
 - **Priority**: High
@@ -61,7 +61,7 @@
 ## Implementation Order
 
 1. **Usage Tracking** (High Priority) - ✅ **COMPLETED**
-2. **Tool Result Streaming** (High Priority) - ⚠️ **PENDING**
+2. **Tool Result Streaming** (High Priority) - ✅ **COMPLETED**
 3. **Message ID Persistence** (Medium Priority) - ✅ **COMPLETED**
 4. **Tool Call ID Validation** (Medium Priority) - ✅ **COMPLETED**
 5. **Error Handling Improvements** (Medium Priority) - ✅ **COMPLETED**
