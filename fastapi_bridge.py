@@ -41,24 +41,58 @@ SSL_VERIFY = os.environ.get("JTIU_SSL_VERIFY", "true").lower() == "true"
 # --- 3. Core Utility ---
 def robust_parse_args(raw: str) -> dict:
     if not raw: return {}
+    
+    # --- Stack-Based JSON Repair for Truncated Outputs ---
+    processed_raw = raw.strip()
+    if not processed_raw.endswith(('}', ']')):
+        stack = []
+        # Basic scanning for unclosed symbols (ignoring strings for simplicity, but improved)
+        in_string = False
+        escape = False
+        for char in processed_raw:
+            if escape:
+                escape = False
+                continue
+            if char == '\\':
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if not in_string:
+                if char in '{[':
+                    stack.append(char)
+                elif char in '}]':
+                    if stack:
+                        # Only pop if it matches (very basic validation)
+                        if (char == '}' and stack[-1] == '{') or (char == ']' and stack[-1] == '['):
+                            stack.pop()
+        
+        # Close remaining items in reverse order
+        while stack:
+            opener = stack.pop()
+            processed_raw += '}' if opener == '{' else ']'
+        
     try:
-        args = json.loads(raw)
-
+        args = json.loads(processed_raw)
+        
         # --- The "Intended State" Translator Layer ---
-
+        # Normalize common hallucinations to the Claude Code Tool Spec
+        
         # 1. Path & URL Mapping
-        for k in ['path', 'TargetFile', 'AbsolutePath', 'notebook_path', 'uri', 'link']:
+        for k in ['path', 'TargetFile', 'AbsolutePath', 'notebook_path', 'uri', 'link', 'filename']:
             if k in args:
                 if 'file_path' not in args and k not in ['uri', 'link']: args['file_path'] = args[k]
                 if 'url' not in args and k in ['uri', 'link']: args['url'] = args[k]
                 if 'notebook_path' not in args and k == 'notebook_path': args['notebook_path'] = args[k]
 
         # 2. Content & Prompt Mapping
-        for k in ['text', 'CodeContent', 'new_string', 'new_source', 'instructions', 'task']:
+        for k in ['text', 'CodeContent', 'new_string', 'new_source', 'instructions', 'task', 'replacement', 'original']:
             if k in args:
-                if 'content' not in args and k in ['text', 'CodeContent', 'new_string']: args['content'] = args[k]
+                if 'content' not in args and k in ['text', 'CodeContent']: args['content'] = args[k]
                 if 'prompt' not in args and k in ['instructions', 'task']: args['prompt'] = args[k]
-                if 'new_source' not in args and k == 'new_source': args['new_source'] = args[k]
+                if 'new_string' not in args and k == 'replacement': args['new_string'] = args[k]
+                if 'old_string' not in args and k == 'original': args['old_string'] = args[k]
 
         # 3. Task Mapping
         if 'title' in args and 'subject' not in args: args['subject'] = args['title']
@@ -67,19 +101,24 @@ def robust_parse_args(raw: str) -> dict:
         if 'body' in args and 'description' not in args: args['description'] = args['body']
 
         # 4. Command & Scheduling Mapping
-        if 'cmd' in args and 'command' not in args: args['command'] = args['cmd']
-        if 'CommandLine' in args and 'command' not in args: args['command'] = args['CommandLine']
+        for k in ['cmd', 'CommandLine', 'script', 'command_line']:
+            if k in args and 'command' not in args: args['command'] = args[k]
+        
         if 'wait' in args and 'delaySeconds' not in args: args['delaySeconds'] = args['wait']
         if 'schedule' in args and 'cron' not in args: args['cron'] = args['schedule']
 
-        # 5. Metadata Record Sync
+        # 5. ID Normalization (Handle taskId vs task_id)
+        for k in ['taskId', 'task_id', 'id', 'cron_id', 'shell_id']:
+            if k in args:
+                val = str(args[k]).strip().strip('"').strip("'").strip()
+                if 'id' not in args: args['id'] = val
+                if 'taskId' not in args: args['taskId'] = val
+                if 'task_id' not in args: args['task_id'] = val
+
+        # 6. Metadata Record Sync
         if 'metadata' in args and isinstance(args['metadata'], str):
             try: args['metadata'] = json.loads(args['metadata'])
             except: pass
-
-        # 6. ID Cleaning
-        for k in ['taskId', 'task_id', 'id', 'cron_id']:
-            if k in args: args[k] = str(args[k]).strip().strip('"').strip("'").strip()
 
         # 7. Status Normalization
         if 'status' in args:
@@ -88,7 +127,9 @@ def robust_parse_args(raw: str) -> dict:
             if s in ['in progress', 'working', 'started']: args['status'] = 'in_progress'
 
         return args
-    except: return {}
+    except:
+        # Final fallback: if JSON is still broken, return as much as we parsed
+        return {"raw_input_error": raw}
 
 class SSEParser:
     def __init__(self): self.buffer = ""
@@ -178,56 +219,79 @@ async def proxy_handler(request: Request):
 
             block_idx, text_started, active_tools = 0, False, {}
             async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=httpx.Timeout(600.0)) as client:
-                async with client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:
-                    parser = SSEParser()
-                    async for chunk in resp.aiter_bytes():
-                        for data_str in parser.feed(chunk):
-                            if data_str == "[DONE]": break
-                            try:
-                                data = json.loads(data_str)
-                                choice = data.get("choices", [{}])[0]
-                                delta = choice.get("delta", {})
+                try:
+                    async with client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:
+                        if resp.status_code != 200:
+                            err_body = await resp.aread()
+                            logger.error(f"Upstream Error {resp.status_code}: {err_body.decode()}")
+                            yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": f"Error from upstream: {resp.status_code}"}})}\n\n'
+                            return
 
-                                if delta.get("content"):
-                                    if not text_started:
-                                        yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": block_idx, "content_block": {"type": "text", "text": ""}})}\n\n'
-                                        text_started = True
-                                    yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": block_idx, "delta": {"type": "text_delta", "text": delta["content"]}})}\n\n'
+                        parser = SSEParser()
+                        async for chunk in resp.aiter_bytes():
+                            for data_str in parser.feed(chunk):
+                                if data_str == "[DONE]": break
+                                try:
+                                    data = json.loads(data_str)
+                                    choice = data.get("choices", [{}])[0]
+                                    delta = choice.get("delta", {})
 
-                                for tc in delta.get("tool_calls", []):
-                                    idx = tc.get("index", 0)
-                                    if idx not in active_tools:
-                                        if text_started:
-                                            yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
-                                            block_idx += 1; text_started = False
-                                        active_tools[idx] = {"id": tc.get("id"), "name": "", "args": "", "block_idx": block_idx, "started": False}
-                                        block_idx += 1
+                                    # Handle Text Content
+                                    if delta.get("content"):
+                                        if not text_started:
+                                            # Close any active tool blocks if text appears (rare but possible)
+                                            yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": block_idx, "content_block": {"type": "text", "text": ""}})}\n\n'
+                                            text_started = True
+                                        yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": block_idx, "delta": {"type": "text_delta", "text": delta["content"]}})}\n\n'
 
-                                    info = active_tools[idx]
-                                    if tc.get("function", {}).get("name"): info["name"] += tc["function"]["name"]
-                                    if tc.get("function", {}).get("arguments"):
-                                        arg_chunk = tc["function"]["arguments"]
-                                        if not info["started"] and info["name"]:
-                                            native_name = tools_list.get(info["name"].lower(), info["name"])
-                                            yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": info["id"], "name": native_name, "input": {}}})}\n\n'
-                                            info["started"] = True
-                                        info["args"] += arg_chunk
-                                        yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": arg_chunk}})}\n\n'
-                            except: pass
+                                    # Handle Tool Calls
+                                    for tc in delta.get("tool_calls", []):
+                                        idx = tc.get("index", 0)
+                                        if idx not in active_tools:
+                                            # If we were writing text, stop that block
+                                            if text_started:
+                                                yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
+                                                block_idx += 1; text_started = False
+                                            
+                                            active_tools[idx] = {"id": tc.get("id"), "name": "", "args": "", "block_idx": block_idx, "started": False}
+                                            block_idx += 1
 
+                                        info = active_tools[idx]
+                                        if tc.get("function", {}).get("name"): 
+                                            info["name"] += tc["function"]["name"]
+                                        
+                                        if tc.get("function", {}).get("arguments"):
+                                            arg_chunk = tc["function"]["arguments"]
+                                            if not info["started"] and info["name"]:
+                                                native_name = tools_list.get(info["name"].lower(), info["name"])
+                                                yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": info["id"] or f"call_{int(time.time())}_{idx}", "name": native_name, "input": {}}})}\n\n'
+                                                info["started"] = True
+                                            info["args"] += arg_chunk
+                                            yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": arg_chunk}})}\n\n'
+                                except Exception as e:
+                                    logger.error(f"Stream Parse Error: {e} | Data: {data_str}")
+                except Exception as e:
+                    logger.error(f"Connection Error: {e}")
+                    yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": block_idx, "content_block": {"type": "text", "text": f"Connection Error: {str(e)}"}})}\n\n'
+
+            # --- Finalization Phase ---
             if text_started:
                 yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
 
-            # Finalize Tools: ONLY emit stop if already started, OR emit full block if missed
-            _NO_STATUS = {"TaskCreate", "TaskList", "TaskGet", "TaskOutput", "TaskStop"}
+            # Ensure all tool calls are closed and valid
+            _NO_STATUS = {"TaskCreate", "TaskList", "TaskGet", "TaskOutput", "TaskStop", "Bash", "Read", "Write", "Edit"}
             for _, info in sorted(active_tools.items()):
                 if info["started"]:
                     yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": info["block_idx"]})}\n\n'
                 else:
-                    native_name = tools_list.get(info["name"].lower(), info["name"])
+                    # Fallback for tools that never even "started" (missed chunks)
+                    native_name = tools_list.get(info["name"].lower(), info["name"] or "unknown_tool")
                     args = robust_parse_args(info["args"])
+                    
+                    # Clean up status hallucinations for specific tools
                     if native_name in _NO_STATUS and "status" in args: del args["status"]
-                    yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": info["id"], "name": native_name, "input": {}}})}\n\n'
+                    
+                    yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": info["id"] or f"gen_{int(time.time())}", "name": native_name, "input": {}}})}\n\n'
                     yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": json.dumps(args)}})}\n\n'
                     yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": info["block_idx"]})}\n\n'
 
@@ -237,7 +301,7 @@ async def proxy_handler(request: Request):
 
         return StreamingResponse(stream_gen(), media_type="text/event-stream")
     except Exception as e:
-        logger.error(f"Fatal: {e}")
+        logger.error(f"Fatal Proxy Error: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
 
 if __name__ == "__main__":
