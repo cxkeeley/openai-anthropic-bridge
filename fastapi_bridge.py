@@ -126,6 +126,13 @@ def robust_parse_args(raw: str) -> dict:
             if s in ['complete', 'done', 'finished']: args['status'] = 'completed'
             if s in ['in progress', 'working', 'started']: args['status'] = 'in_progress'
 
+        # 8. Web & Search Mapping
+        for k in ['q', 'search', 'search_query']:
+            if k in args and 'query' not in args: args['query'] = args[k]
+        
+        for k in ['domains', 'site', 'sites']:
+            if k in args and 'allowed_domains' not in args: args['allowed_domains'] = args[k]
+
         return args
     except:
         # Final fallback: if JSON is still broken, return as much as we parsed
@@ -279,7 +286,7 @@ async def proxy_handler(request: Request):
                 yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
 
             # Ensure all tool calls are closed and valid
-            _NO_STATUS = {"TaskCreate", "TaskList", "TaskGet", "TaskOutput", "TaskStop", "Bash", "Read", "Write", "Edit"}
+            _NO_STATUS = {"TaskCreate", "TaskList", "TaskGet", "TaskOutput", "TaskStop", "Bash", "Read", "Write", "Edit", "WebSearch", "WebFetch", "AskUserQuestion", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "Skill", "Monitor", "RemoteTrigger", "EnterPlanMode", "ExitPlanMode", "EnterWorktree", "ExitWorktree", "Agent", "Plan", "Explore", "claude-code-guide", "statusline-setup", "update-config", "fewer-permission-prompts", "loop", "schedule", "claude-api", "init", "review", "security-review"}
             for _, info in sorted(active_tools.items()):
                 if info["started"]:
                     yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": info["block_idx"]})}\n\n'
