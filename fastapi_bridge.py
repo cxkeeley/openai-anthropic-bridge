@@ -41,7 +41,7 @@ SYSTEM_OVERRIDE = os.environ.get("JTIU_SYSTEM_OVERRIDE", "")
 SSL_VERIFY = os.environ.get("JTIU_SSL_VERIFY", "true").lower() == "true"
 
 # Rate Limiting Configuration
-RATE_LIMIT_ENABLED = os.environ.get("JTIU_RATE_LIMIT_ENABLED", "true").lower() == "true"
+RATE_LIMIT_ENABLED = os.environ.get("JTIU_RATE_LIMIT_ENABLED", "false").lower() == "true"
 RATE_LIMIT_REQUESTS = int(os.environ.get("JTIU_RATE_LIMIT_REQUESTS", "10"))
 RATE_LIMIT_WINDOW = float(os.environ.get("JTIU_RATE_LIMIT_WINDOW", "60.0"))
 
@@ -89,7 +89,7 @@ def validate_tool_call_id(tool_call_id: str) -> bool:
     if not tool_call_id:
         return False
     # Claude/Anthropic tool call IDs typically start with 'call_' followed by alphanumeric chars
-    pattern = r'^call_[a-zA-Z0-9_-]+$'
+    pattern = r'^call_[a-zA-Z0-9_.-]+$'
     return bool(re.match(pattern, tool_call_id))
 
 
@@ -231,7 +231,7 @@ async def root():
     return {"status": "online", "bridge": "openai-anthropic", "model": MODEL_NAME}
 
 @app.get("/health")
-async def health():
+def health():
     # Rate limiting check for health endpoint
     if not rate_limiter.is_allowed():
         retry_after = rate_limiter.get_retry_after()
@@ -249,28 +249,18 @@ async def health():
 
     if TARGET_URL:
         try:
-            import asyncio
             import httpx
 
-            async def check_upstream():
-                async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=httpx.Timeout(5.0)) as client:
-                    start_time = time.time()
-                    try:
-                        resp = await client.get(TARGET_URL)
-                        latency_ms = (time.time() - start_time) * 1000
-                        upstream_status = "ok" if resp.status_code < 500 else "error"
-                        upstream_latency_ms = latency_ms
-                    except Exception as e:
-                        upstream_status = "error"
-                        logger.warning(f"Upstream health check failed: {e}")
-                    return upstream_status, upstream_latency_ms
-
-            # Run async health check
-            loop = asyncio.new_event_loop()
-            try:
-                upstream_status, upstream_latency_ms = loop.run_until_complete(check_upstream())
-            finally:
-                loop.close()
+            with httpx.Client(verify=SSL_VERIFY, timeout=httpx.Timeout(5.0)) as client:
+                start_time = time.time()
+                try:
+                    resp = client.get(TARGET_URL)
+                    latency_ms = (time.time() - start_time) * 1000
+                    upstream_status = "ok" if resp.status_code < 500 else "error"
+                    upstream_latency_ms = latency_ms
+                except Exception as e:
+                    upstream_status = "error"
+                    logger.warning(f"Upstream health check failed: {e}")
         except Exception as e:
             upstream_status = "error"
             logger.warning(f"Health check error: {e}")
