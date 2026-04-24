@@ -14,13 +14,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- 1. Logging ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_PATH = os.path.join(BASE_DIR, "bridge.log")
+
+# Auto-cleanup if Docker/System created a directory named 'bridge.log'
+if os.path.isdir(LOG_PATH):
+    import shutil
+    shutil.rmtree(LOG_PATH)
+
 log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
-file_handler = logging.handlers.RotatingFileHandler("bridge.log", maxBytes=10*1024*1024, backupCount=3)
+file_handler = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=10*1024*1024, backupCount=3)
 file_handler.setFormatter(log_formatter)
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
 logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler])
 logger = logging.getLogger("Bridge")
+logger.info(f"BRIDGE LOGGING TO: {LOG_PATH}")
 
 # --- 2. Configuration ---
 TARGET_URL = os.environ.get("JTIU_TARGET_URL", "")
@@ -144,7 +153,13 @@ async def proxy_handler(request: Request):
 
         if final_sys: messages.insert(0, {"role": "system", "content": final_sys})
 
-        payload = {"model": MODEL_NAME, "stream": True, "messages": messages, "tools": [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in body.get("tools", [])] if body.get("tools") else None}
+        payload = {
+            "model": MODEL_NAME,
+            "stream": True,
+            "temperature": body.get("temperature", 0.0),
+            "messages": messages,
+            "tools": [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in body.get("tools", [])] if body.get("tools") else None
+        }
 
         async def stream_gen():
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": f"msg_{int(time.time())}", "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
