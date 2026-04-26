@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.10-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -9,18 +9,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies if required (mostly empty for light apps)
-RUN apt-get update && apt-get install -y --no-install-recommends gcc libc-dev python3-dev && rm -rf /var/lib/apt/lists/*
-
 # Install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
+# Copy only the compiled binary and necessary files (.dockerignore handles the rest)
 COPY . .
-
-# Compile the bridge with Cython for maximum performance
-RUN python3 setup_cython.py build_ext --inplace && rm fastapi_bridge.py setup_cython.py
 
 # Expose the API port
 EXPOSE 8000
