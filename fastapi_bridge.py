@@ -86,7 +86,7 @@ class RateLimiter:
 rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW)
 
 # --- 4. Core Utility ---
-def validate_tool_call_id(tool_call_id: str) -> bool:
+def validate_tool_call_id(tool_call_id: str | None) -> bool:
     """
     Validate that a tool call ID matches the expected format.
     Expected format: 'call_' followed by alphanumeric characters, underscores, hyphens, and dots
