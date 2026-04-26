@@ -45,6 +45,9 @@ RATE_LIMIT_ENABLED = os.environ.get("JTIU_RATE_LIMIT_ENABLED", "false").lower() 
 RATE_LIMIT_REQUESTS = int(os.environ.get("JTIU_RATE_LIMIT_REQUESTS", "10"))
 RATE_LIMIT_WINDOW = float(os.environ.get("JTIU_RATE_LIMIT_WINDOW", "60.0"))
 
+# Model Parameters Configuration
+MODEL_PARAMS = os.environ.get("JTIU_MODEL_PARAMS", "")
+
 # --- 3. Rate Limiter ---
 class RateLimiter:
     """Simple sliding window rate limiter"""
@@ -55,7 +58,9 @@ class RateLimiter:
 
     def is_allowed(self) -> bool:
         """Check if a request is allowed under the rate limit"""
-        if not RATE_LIMIT_ENABLED:
+        # Check environment variable at runtime
+        rate_limit_enabled = os.environ.get("JTIU_RATE_LIMIT_ENABLED", "false").lower() == "true"
+        if not rate_limit_enabled:
             return True
 
         now = time.time()
@@ -98,6 +103,34 @@ def generate_tool_call_id(idx: int) -> str:
     Generate a valid tool call ID that matches expected format
     """
     return f"call_{uuid.uuid4().hex}_{idx}"
+
+
+def get_model_params() -> Dict[str, Any]:
+    """
+    Get model parameters from environment or use defaults.
+    Returns a dict with model_params structure for JiuTian API.
+    """
+    import os
+    import json
+
+    # Try to load from environment variable
+    env_params = os.environ.get("JTIU_MODEL_PARAMS", "")
+    if env_params:
+        try:
+            return json.loads(env_params)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse JTIU_MODEL_PARAMS, using defaults")
+
+    # Default model parameters
+    return {
+        "text": {
+            "temperature": 0.2,
+            "max_tokens": 8192,
+            "presence_penalty": 1.1,
+            "frequency_penalty": 0.3,
+            "top_p": 0.9
+        }
+    }
 
 
 def robust_parse_args(raw: str) -> dict:
@@ -326,12 +359,16 @@ async def proxy_handler(request: Request):
 
         if final_sys: messages.insert(0, {"role": "system", "content": final_sys})
 
+        # Get model parameters
+        model_params = get_model_params()
+
         payload = {
             "model": MODEL_NAME,
             "stream": True,
             "temperature": body.get("temperature", 0.0),
             "messages": messages,
-            "tools": [{"type": "function", "function": {"name": t.get("name", ""), "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in body.get("tools", [])] if body.get("tools") else None
+            "tools": [{"type": "function", "function": {"name": t.get("name", ""), "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in body.get("tools", [])] if body.get("tools") else None,
+            "model_params": model_params
         }
 
         async def stream_gen():
