@@ -287,9 +287,11 @@ def health():
             with httpx.Client(verify=SSL_VERIFY, timeout=httpx.Timeout(5.0)) as client:
                 start_time = time.time()
                 try:
-                    resp = client.get(TARGET_URL)
+                    headers = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
+                    resp = client.get(TARGET_URL, headers=headers)
                     latency_ms = (time.time() - start_time) * 1000
-                    upstream_status = "ok" if resp.status_code < 500 else "error"
+                    # A 405 (Method Not Allowed) or 403 (Forbidden) still means the upstream is reachable
+                    upstream_status = "ok" if resp.status_code < 500 or resp.status_code in [403, 405] else "error"
                     upstream_latency_ms = latency_ms
                 except Exception as e:
                     upstream_status = "error"
