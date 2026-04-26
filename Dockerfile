@@ -16,8 +16,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc && rm -rf /
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy source code
+# Copy source code and compiled binary
 COPY . .
+
+# Remove the simple source file to ensure Python loads the complex compiled .so binary
+RUN rm fastapi_bridge.py
 
 # Expose the API port
 EXPOSE 8000
