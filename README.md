@@ -4,10 +4,12 @@ This repository contains a robust bridge application that allows you to use the 
 
 ## Features
 
-- **Agentic Capability**: Includes strict system prompt overrides to force models like `qwen3-coder-next` and `jt_indonesia` to emit perfect OpenAI JSON tooling hooks.
-- **Docker Compose Ready**: One-click containerization with `gunicorn` for parallel thread processing.
-- **Auto-Healing Streams**: Real-time bracket interpolation fixes tokenization glitches during Server-Sent Event (SSE) streaming.
-- **Localization Override**: Forces the native model to communicate in strict English rather than Chinese defaults.
+- **Dual API Support**: Native Anthropic API (`/v1/messages`) and OpenAI-compatible (`/v1/chat/completions`) endpoints
+- **Model Parameters**: Configurable model parameters (temperature, max_tokens, penalties) via `JTIU_MODEL_PARAMS`
+- **Rate Limiting**: Optional rate limiting with configurable requests per window
+- **Docker Compose Ready**: One-click containerization with `gunicorn` for parallel thread processing
+- **Auto-Healing Streams**: Real-time bracket interpolation fixes tokenization glitches during Server-Sent Event (SSE) streaming
+- **Localization Override**: Forces the native model to communicate in strict English rather than Chinese defaults
 
 ## Prerequisites
 
@@ -58,24 +60,41 @@ The bridge dynamically reads variables from your `.env` file mapping.
 |----------|-------------|---------|
 | `HOST` | Host to bind to | `0.0.0.0` |
 | `PORT` | Port to listen on | `8000` |
-| `JTIU_TARGET_URL` | Target JiuTian service URL | `https://ai.asix.id.../chat/completions` |
+| `JTIU_TARGET_URL` | Target JiuTian service URL | (Required) |
 | `JTIU_TOKEN` | Authentication JWT token | (Required) |
-| `JTIU_MODEL` | Target coding model override | `qwen3-coder-next` |
+| `JTIU_MODEL` | Target model name | `jt_indonesia` |
+| `JTIU_SYSTEM_OVERRIDE` | System prompt override | (Optional) |
+| `JTIU_SSL_VERIFY` | SSL verification | `true` |
+| `JTIU_RATE_LIMIT_ENABLED` | Enable rate limiting | `false` |
+| `JTIU_RATE_LIMIT_REQUESTS` | Max requests per window | `10` |
+| `JTIU_RATE_LIMIT_WINDOW` | Time window in seconds | `60.0` |
+| `JTIU_MODEL_PARAMS` | Model parameters in JSON format | (Optional) |
 
 ## Connect Claude Code
 
-To boot Anthropic's Claude Code utilizing your local proxy cluster, set these environment variables and run it:
+To use Claude Code with your local bridge, set these environment variables:
 
 ```bash
 # Point Claude at your localhost bridge
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8000"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:8000`
 
 # Enter any string, the proxy ignores this and uses JTIU_TOKEN
-export ANTHROPIC_API_KEY="sk-any-key"
+export ANTHROPIC_API_KEY="sk-any-key`
 
 # Launch the agent
 claude
 ```
+
+## Project Structure
+
+- `claude_bridge.py`: Main application with enhanced error handling and configuration
+- `simple_bridge.py`: Basic implementation of the bridge functionality
+- `start_claude_bridge.sh`: Enhanced startup script with better configuration options
+- `test_claude_bridge.py`: Comprehensive test suite for the bridge
+- `test-jiutien.py`: Additional test script for the JiuTian model
+- `requirements.txt`: Python dependencies
+- `.env.example`: Example environment configuration file
+- `.claude/`: Claude Code project settings (optional)
 
 ## Troubleshooting
 

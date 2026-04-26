@@ -1,0 +1,89 @@
+{
+  "model": "claude-opus-4-7",
+  "maxOutputTokens": 8192,
+  "temperature": 0.2,
+  "topP": 0.9,
+  "thinking": {
+    "type": "enabled",
+    "budgetTokens": 16000
+  },
+  "tools": [
+    {
+      "name": "bash",
+      "description": "Execute shell commands",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The shell command to execute"
+          }
+        },
+        "required": ["command"]
+      }
+    },
+    {
+      "name": "read",
+      "description": "Read files",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Path to the file to read"
+          }
+        },
+        "required": ["file_path"]
+      }
+    },
+    {
+      "name": "write",
+      "description": "Write files",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "description": "Path to the file to write"
+          },
+          "content": {
+            "type": "string",
+            "description": "Content to write to the file"
+          }
+        },
+        "required": ["file_path", "content"]
+      }
+    }
+  ],
+  "memory": {
+    "enabled": true,
+    "path": "/mnt/projectone/openai-anthropic-bridge/.claude/memory"
+  },
+  "hooks": {
+    "onStart": {
+      "description": "Initialize project context on start",
+      "commands": [
+        "git status",
+        "git log --oneline -5"
+      ]
+    },
+    "onExit": {
+      "description": "Save session state on exit",
+      "commands": [
+        "echo 'Session saved'"
+      ]
+    }
+  },
+  "permissions": {
+    "allow": [
+      "read",
+      "write",
+      "bash"
+    ],
+    "deny": []
+  },
+  "autoApprove": [
+    "read",
+    "write"
+  ]
+}
