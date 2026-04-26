@@ -8,3 +8,4 @@ bridge.log
 # Python
 __pycache__/
 *.pyc
+*.so
