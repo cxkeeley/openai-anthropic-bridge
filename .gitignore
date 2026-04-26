@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Claude settings (local configuration)
+.claude/
+
 # Logs
 *.log
 bridge.log
