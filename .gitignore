@@ -1,14 +1,24 @@
-# Secrets
+# Secrets and Credentials
 .env
+.env.bak
 
-# Claude settings (local configuration)
+# Claude Code Configuration
 .claude/
 
 # Logs
 *.log
 bridge.log
 
-# Python
+# Python & Cython Build Artifacts
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+*.c
+build/
 *.so
+
+# Environment
+venv/
+.venv/
+.env/
