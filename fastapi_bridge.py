@@ -550,10 +550,19 @@ def health():
 @app.post("/v1/messages")
 async def proxy_handler(request: Request):
     try:
+        # Extract request context for logging
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        client_ip = request.client.host if request.client else "unknown"
+        endpoint = request.url.path
+        method = request.method
+
+        # Log request start with context
+        start_time = log_request_start(request_id, endpoint, method)
+
         # Rate limiting check
         if not rate_limiter.is_allowed():
             retry_after = rate_limiter.get_retry_after()
-            logger.warning(f"Rate limit exceeded. Retry after: {retry_after} seconds")
+            log_warning(request_id, endpoint, method, f"Rate limit exceeded. Retry after: {retry_after} seconds")
             return JSONResponse(
                 {"error": {"message": "Rate limit exceeded", "code": "rate_limit_exceeded"}},
                 status_code=429,
@@ -673,7 +682,7 @@ async def proxy_handler(request: Request):
                     async with client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:
                         if resp.status_code != 200:
                             err_body = await resp.aread()
-                            logger.error(f"Upstream Error {resp.status_code}: {err_body.decode()}")
+                            log_error(request_id, endpoint, method, f"Upstream Error {resp.status_code}: {err_body.decode()}")
                             yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": f"Error from upstream: {resp.status_code}"}})}\n\n'
                             return
 
@@ -730,9 +739,9 @@ async def proxy_handler(request: Request):
                                             info["args"] += arg_chunk
                                             yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": arg_chunk}})}\n\n'
                                 except Exception as e:
-                                    logger.error(f"Stream Parse Error: {e} | Data: {data_str}")
+                                    log_error(request_id, endpoint, method, f"Stream Parse Error: {e} | Data: {data_str}")
                 except Exception as e:
-                    logger.error(f"Connection Error: {e}")
+                    log_error(request_id, endpoint, method, f"Connection Error: {e}")
                     yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": block_idx, "content_block": {"type": "text", "text": f"Connection Error: {str(e)}"}})}\n\n'
 
             # --- Finalization Phase ---
@@ -764,7 +773,7 @@ async def proxy_handler(request: Request):
                     # FIX 3: Guard against empty-arg tool calls which cause Claude Code to loop.
                     if not args and native_name in _EMPTY_ARGS_DEFAULTS:
                         args = _EMPTY_ARGS_DEFAULTS[native_name]
-                        logger.warning(f"Empty args for '{native_name}' — injecting safe default: {args}")
+                        log_warning(request_id, endpoint, method, f"Empty args for '{native_name}' — injecting safe default: {args}")
 
                     # FIX 1 (fallback path): Use the tool_id already set in info dict
                     tool_id = info.get("tool_id", generate_tool_call_id(0))
@@ -779,7 +788,7 @@ async def proxy_handler(request: Request):
 
         return StreamingResponse(stream_gen(), media_type="text/event-stream")
     except Exception as e:
-        logger.error(f"Fatal Proxy Error: {e}", exc_info=True)
+        log_error(request_id, endpoint, method, f"Fatal Proxy Error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
 
 if __name__ == "__main__":
