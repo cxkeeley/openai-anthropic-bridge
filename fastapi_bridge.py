@@ -33,6 +33,10 @@ logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler])
 logger = logging.getLogger("Bridge")
 logger.info(f"BRIDGE LOGGING TO: {LOG_PATH}")
 
+# Silence noisy dependency logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+
 # --- 2. Configuration ---
 TARGET_URL = os.environ.get("JTIU_TARGET_URL", "")
 API_TOKEN = os.environ.get("JTIU_TOKEN", "")
