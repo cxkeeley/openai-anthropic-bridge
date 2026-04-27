@@ -355,9 +355,62 @@ async def proxy_handler(request: Request):
         if isinstance(sys_p, list): sys_p = "".join(b["text"] for b in sys_p if b.get("type") == "text")
 
         # Apply System Override / Persona Injection
+        # 'ANTIGRAVITY' EXPERT PERSONA: This forces the model into a high-precision, meta-cognitive state.
+        EXPERT_PERSONA = (
+            "\n\n[INSTRUCTION: ANTIGRAVITY EXPERT MODE]\n"
+            "You are a high-precision Systems Architect. Follow these rules for every turn:\n"
+            "1. TOOL PREFERENCE: Do NOT use generic bash commands (cat, grep, ls, sed, awk) if a specialized tool is available (view_file, grep_search, list_dir, replace_file_content).\n"
+            "2. REASONING: Before every tool call, explicitly state your reasoning for choosing that specific tool over others.\n"
+            "3. VERIFICATION: After a file edit fails, do NOT guess. Use 'view_file' to re-verify the content and indentation before retrying.\n"
+            "4. BASH FAILURES: If a Bash command fails, DO NOT repeat the exact same command. Analyze the error (e.g., ModuleNotFoundError, SyntaxError), fix the underlying code or environment, and then retry with a modified approach.\n"
+            "5. NUCLEAR OPTION: If an 'Edit' fails twice, switch to 'Write' to provide the full file content.\n"
+            "6. NO PLACEHOLDERS: Never use '...' or 'content remains same'. Provide complete, working code blocks."
+        )
+
         final_sys = SYSTEM_OVERRIDE
-        # if sys_p: messages.insert(0, {"role": "system", "content": sys_p})
         if sys_p: final_sys = f"{SYSTEM_OVERRIDE}\n\n{sys_p}" if final_sys else sys_p
+
+        # Inject the high-precision persona
+        final_sys = f"{final_sys}{EXPERT_PERSONA}" if final_sys else EXPERT_PERSONA.strip()
+
+        # [CIRCUIT BREAKER] Detect repeated tool calls in message history to break agentic loops
+        repeats = 0
+        last_calls = None
+        last_read_file = None
+        actions_since_read = 0
+
+        for msg in reversed(messages):
+            if msg["role"] == "assistant" and "tool_calls" in msg:
+                current_calls = []
+                for tc in msg["tool_calls"]:
+                    name = tc.get("function", {}).get("name")
+                    current_calls.append(name)
+                    
+                    # Track Read operations
+                    if name in ["Read", "view_file"]:
+                        args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                        file_path = args.get("file_path") or args.get("AbsolutePath") or args.get("path")
+                        if file_path == last_read_file and actions_since_read == 0:
+                            repeats += 1
+                        last_read_file = file_path
+                        actions_since_read = 0
+                    elif name not in ["Read", "view_file", "list_dir", "ls"]:
+                        actions_since_read += 1
+
+                if last_calls == current_calls and current_calls:
+                    repeats += 1
+                else:
+                    if last_calls is not None: break
+                    last_calls = current_calls
+        
+        if repeats >= 2:
+            logger.warning(f"CIRCUIT BREAKER: Detected {repeats} redundant tool calls. Injecting warning.")
+            final_sys += (
+                "\n\n[CIRCUIT BREAKER WARNING]\n"
+                "You are repeating the same tool calls or reading the same file multiple times without progress. "
+                "STOP and analyze why your previous attempt failed. "
+                "If you are stuck on a SyntaxError, use 'Write' to overwrite the file or 'Edit' with a different match string."
+            )
 
         if final_sys: messages.insert(0, {"role": "system", "content": final_sys})
 
@@ -434,7 +487,7 @@ async def proxy_handler(request: Request):
                                             arg_chunk = tc["function"]["arguments"]
                                             if not info["started"] and info["name"]:
                                                 native_name = tools_list.get(info["name"].lower(), info["name"])
-                                                # FIX 1: Use the tool_id already set in info dict
+                                                # Use the tool_id already set in info dict (FIX 1)
                                                 tool_id = info.get("tool_id", generate_tool_call_id(idx))
                                                 yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": tool_id, "name": native_name, "input": {}}})}\n\n'
                                                 info["started"] = True
