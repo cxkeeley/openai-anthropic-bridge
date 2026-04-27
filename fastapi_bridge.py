@@ -419,19 +419,24 @@ async def proxy_handler(request: Request):
                                             if text_started:
                                                 yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
                                                 block_idx += 1; text_started = False
-                                            
-                                            active_tools[idx] = {"id": tc.get("id"), "name": "", "args": "", "block_idx": block_idx, "started": False}
+
+                                            # FIX 5: Set tool_id at block start using upstream ID
+                                            upstream_id = tc.get("id")
+                                            tool_id = upstream_id if upstream_id else generate_tool_call_id(idx)
+                                            active_tools[idx] = {"id": upstream_id, "tool_id": tool_id, "name": "", "args": "", "block_idx": block_idx, "started": False}
                                             block_idx += 1
 
                                         info = active_tools[idx]
-                                        if tc.get("function", {}).get("name"): 
+                                        if tc.get("function", {}).get("name"):
                                             info["name"] += tc["function"]["name"]
-                                        
+
                                         if tc.get("function", {}).get("arguments"):
                                             arg_chunk = tc["function"]["arguments"]
                                             if not info["started"] and info["name"]:
                                                 native_name = tools_list.get(info["name"].lower(), info["name"])
-                                                yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": generate_tool_call_id(idx), "name": native_name, "input": {}}})}\n\n'
+                                                # FIX 1: Use the tool_id already set in info dict
+                                                tool_id = info.get("tool_id", generate_tool_call_id(idx))
+                                                yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": tool_id, "name": native_name, "input": {}}})}\n\n'
                                                 info["started"] = True
                                             info["args"] += arg_chunk
                                             yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": arg_chunk}})}\n\n'
@@ -446,7 +451,14 @@ async def proxy_handler(request: Request):
                 yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
 
             # Ensure all tool calls are closed and valid
-            _NO_STATUS = {"TaskCreate", "TaskList", "TaskGet", "TaskOutput", "TaskStop", "Bash", "Read", "Write", "Edit", "WebSearch", "WebFetch", "AskUserQuestion", "CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "Skill", "Monitor", "RemoteTrigger", "EnterPlanMode", "ExitPlanMode", "EnterWorktree", "ExitWorktree", "Agent", "Plan", "Explore", "claude-code-guide", "statusline-setup", "update-config", "fewer-permission-prompts", "loop", "schedule", "claude-api", "init", "review", "security-review"}
+            # Tools that legitimately use 'status' in their schema
+            _STATUS_ALLOWED = {"TaskUpdate"}
+            # Per-tool safe argument defaults to prevent empty-call loops
+            _EMPTY_ARGS_DEFAULTS = {
+                "ls": {"path": "."},
+                "Bash": {"command": "echo 'no-op'"},
+                "Read": {"file_path": "."},
+            }
             for _, info in sorted(active_tools.items()):
                 if info["started"]:
                     yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": info["block_idx"]})}\n\n'
@@ -454,11 +466,20 @@ async def proxy_handler(request: Request):
                     # Fallback for tools that never even "started" (missed chunks)
                     native_name = tools_list.get(info["name"].lower(), info["name"] or "unknown_tool")
                     args = robust_parse_args(info["args"])
-                    
-                    # Clean up status hallucinations for specific tools
-                    if native_name in _NO_STATUS and "status" in args: del args["status"]
-                    
-                    yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": info["id"] or f"gen_{int(time.time())}", "name": native_name, "input": {}}})}\n\n'
+
+                    # FIX 2: Aggressively strip hallucinated 'status' for every tool not in the allow-list.
+                    if "status" in args and native_name not in _STATUS_ALLOWED:
+                        del args["status"]
+                        logger.debug(f"Stripped hallucinated 'status' field from {native_name} call")
+
+                    # FIX 3: Guard against empty-arg tool calls which cause Claude Code to loop.
+                    if not args and native_name in _EMPTY_ARGS_DEFAULTS:
+                        args = _EMPTY_ARGS_DEFAULTS[native_name]
+                        logger.warning(f"Empty args for '{native_name}' — injecting safe default: {args}")
+
+                    # FIX 1 (fallback path): Use the tool_id already set in info dict
+                    tool_id = info.get("tool_id", generate_tool_call_id(0))
+                    yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": tool_id, "name": native_name, "input": {}}})}\n\n'
                     yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": json.dumps(args)}})}\n\n'
                     yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": info["block_idx"]})}\n\n'
 

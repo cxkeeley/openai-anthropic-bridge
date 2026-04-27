@@ -1,11 +1,11 @@
 {
   "model": "claude-opus-4-7",
-  "maxOutputTokens": 8192,
-  "temperature": 0.2,
-  "topP": 0.9,
+  "maxOutputTokens": 16384,
+  "temperature": 0.1,
+  "topP": 0.95,
   "thinking": {
     "type": "enabled",
-    "budgetTokens": 16000
+    "budgetTokens": 32000
   },
   "tools": [
     {
@@ -89,15 +89,8 @@
     ]
   },
   "permissions": {
-    "allow": [
-      "Read",
-      "Write",
-      "Bash"
-    ],
+    "allow": ["Read", "Write", "Bash"],
     "deny": []
   },
-  "autoApprove": [
-    "Read",
-    "Write"
-  ]
+  "autoApprove": ["Read", "Write"]
 }
