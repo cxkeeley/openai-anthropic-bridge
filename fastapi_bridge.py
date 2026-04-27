@@ -10,7 +10,7 @@ import re
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -24,18 +24,71 @@ if os.path.isdir(LOG_PATH):
     import shutil
     shutil.rmtree(LOG_PATH)
 
-log_formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
+# Structured logging formatter with request context
+class StructuredLogFormatter(logging.Formatter):
+    """Custom formatter that adds request context for structured logging"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        # Add request context if available
+        request_id = getattr(record, 'request_id', 'N/A')
+        client_ip = getattr(record, 'client_ip', 'N/A')
+
+        # Create structured JSON-like format
+        log_entry = {
+            'timestamp': self.formatTime(record, self.datefmt),
+            'level': record.levelname,
+            'logger': record.name,
+            'request_id': request_id,
+            'client_ip': client_ip,
+            'message': record.getMessage()
+        }
+
+        # Add extra fields if present
+        if hasattr(record, 'endpoint'):
+            log_entry['endpoint'] = record.endpoint
+        if hasattr(record, 'method'):
+            log_entry['method'] = record.method
+        if hasattr(record, 'status_code'):
+            log_entry['status_code'] = record.status_code
+        if hasattr(record, 'duration_ms'):
+            log_entry['duration_ms'] = record.duration_ms
+        if hasattr(record, 'response_size'):
+            log_entry['response_size'] = record.response_size
+
+        return json.dumps(log_entry, indent=None, separators=(',', ':'))
+
+    def formatException(self, ei):
+        if ei[0]:
+            return f"\n{self.formatExceptionName(ei[0])}: {ei[1]}"
+        return ""
+
+    def formatExceptionName(self, ei):
+        return ei[0].__name__ if ei[0] else "Exception"
+
+# Create log directory if it doesn't exist
+LOG_DIR = os.path.dirname(LOG_PATH)
+if LOG_DIR and not os.path.exists(LOG_DIR):
+    os.makedirs(LOG_DIR, exist_ok=True)
+
+# Configure logging
+log_formatter = StructuredLogFormatter()
 file_handler = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=10*1024*1024, backupCount=3)
 file_handler.setFormatter(log_formatter)
+file_handler.setLevel(logging.INFO)
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
-logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler])
+stream_handler.setLevel(logging.INFO)
+
+# Configure root logger
+logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler], force=True)
 logger = logging.getLogger("Bridge")
 logger.info(f"BRIDGE LOGGING TO: {LOG_PATH}")
 
 # Silence noisy dependency logs
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("uvicorn").setLevel(logging.WARNING)
+logging.getLogger("fastapi").setLevel(logging.WARNING)
 
 # --- 2. Configuration ---
 TARGET_URL = os.environ.get("JTIU_TARGET_URL", "")
@@ -88,6 +141,184 @@ class RateLimiter:
 
 # Global rate limiter instance
 rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW)
+
+# --- 3. Request Context Middleware ---
+class RequestLoggingMiddleware:
+    """Middleware to add request context to log records"""
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        request = Request(scope)
+        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+        client_ip = request.client.host if request.client else "unknown"
+
+        # Add request context to log records
+        log_context = {
+            'request_id': request_id,
+            'client_ip': client_ip,
+            'endpoint': request.url.path,
+            'method': request.method,
+        }
+
+        # Store context for use in logging
+        for key, value in log_context.items():
+            setattr(request, f'log_{key}', value)
+
+        # Process the request
+        start_time = time.time()
+        try:
+            await self.app(scope, receive, send)
+        except Exception as e:
+            # Log the exception with request context
+            logger.error(
+                f"Request failed",
+                extra={
+                    'request_id': request_id,
+                    'client_ip': client_ip,
+                    'endpoint': request.url.path,
+                    'method': request.method,
+                    'error': str(e),
+                }
+            )
+            raise
+        finally:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                f"Request completed",
+                extra={
+                    'request_id': request_id,
+                    'client_ip': client_ip,
+                    'endpoint': request.url.path,
+                    'method': request.method,
+                    'duration_ms': round(duration_ms, 2),
+                }
+            )
+
+# --- 5. Logging Helper Functions ---
+def log_request_start(request_id: str, endpoint: str, method: str) -> float:
+    """
+    Log the start of a request and return the start time.
+
+    Args:
+        request_id: Unique request identifier
+        endpoint: Request endpoint path
+        method: HTTP method
+    Returns:
+        Start time for duration calculation
+    """
+    logger.info(
+        f"Request started",
+        extra={
+            'request_id': request_id,
+            'endpoint': endpoint,
+            'method': method,
+        }
+    )
+    return time.time()
+
+
+def log_request_end(
+    request_id: str,
+    endpoint: str,
+    method: str,
+    status_code: int,
+    start_time: float,
+    response_size: int = 0,
+) -> None:
+    """
+    Log the end of a request with duration and response info.
+
+    Args:
+        request_id: Unique request identifier
+        endpoint: Request endpoint path
+        method: HTTP method
+        status_code: Response status code
+        start_time: Request start time
+        response_size: Response size in bytes
+    """
+    duration_ms = (time.time() - start_time) * 1000
+    logger.info(
+        f"Request completed",
+        extra={
+            'request_id': request_id,
+            'endpoint': endpoint,
+            'method': method,
+            'status_code': status_code,
+            'duration_ms': round(duration_ms, 2),
+            'response_size': response_size,
+        }
+    )
+
+
+def log_error(
+    request_id: str,
+    endpoint: str,
+    method: str,
+    error: str,
+    status_code: int = 500,
+) -> None:
+    """
+    Log an error with request context.
+
+    Args:
+        request_id: Unique request identifier
+        endpoint: Request endpoint path
+        method: HTTP method
+        error: Error message
+        status_code: HTTP status code
+    """
+    logger.error(
+        f"Request failed",
+        extra={
+            'request_id': request_id,
+            'endpoint': endpoint,
+            'method': method,
+            'status_code': status_code,
+            'error': error,
+        }
+    )
+
+
+def log_warning(
+    request_id: str,
+    endpoint: str,
+    method: str,
+    message: str,
+) -> None:
+    """
+    Log a warning with request context.
+
+    Args:
+        request_id: Unique request identifier
+        endpoint: Request endpoint path
+        method: HTTP method
+        message: Warning message
+    """
+    logger.warning(
+        f"Request warning",
+        extra={
+            'request_id': request_id,
+            'endpoint': endpoint,
+            'method': method,
+            'message': message,
+        }
+    )
+
+
+def get_logger() -> logging.Logger:
+    """
+    Get the bridge logger instance.
+
+    Returns:
+        Logger instance
+    """
+    return logger
+
 
 # --- 4. Core Utility ---
 def validate_tool_call_id(tool_call_id: str | None) -> bool:
@@ -261,6 +492,7 @@ def merge_messages(messages: List[Dict[Any, Any]]) -> List[Dict[Any, Any]]:
 
 # --- 4. Server ---
 app = FastAPI()
+app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 @app.get("/")
