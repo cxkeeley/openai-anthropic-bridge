@@ -44,6 +44,10 @@ class StructuredLogFormatter(logging.Formatter):
         }
 
         # Add extra fields if present
+        if hasattr(record, 'detail'):
+            log_entry['detail'] = record.detail
+        if hasattr(record, 'error'):
+            log_entry['error'] = record.error
         if hasattr(record, 'endpoint'):
             log_entry['endpoint'] = record.endpoint
         if hasattr(record, 'method'):
@@ -156,32 +160,24 @@ class RequestLoggingMiddleware:
         request = Request(scope)
         request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
         client_ip = request.client.host if request.client else "unknown"
-
-        # Add request context to log records
-        log_context = {
-            'request_id': request_id,
-            'client_ip': client_ip,
-            'endpoint': request.url.path,
-            'method': request.method,
-        }
-
-        # Store context for use in logging
-        for key, value in log_context.items():
-            setattr(request, f'log_{key}', value)
-
-        # Process the request
+        endpoint = request.url.path
+        method = request.method
         start_time = time.time()
+
+        # Store ID in state for use by endpoints
+        scope["state"] = scope.get("state", {})
+        scope["state"]["request_id"] = request_id
+
         try:
             await self.app(scope, receive, send)
         except Exception as e:
-            # Log the exception with request context
             logger.error(
                 f"Request failed",
                 extra={
                     'request_id': request_id,
                     'client_ip': client_ip,
-                    'endpoint': request.url.path,
-                    'method': request.method,
+                    'endpoint': endpoint,
+                    'method': method,
                     'error': str(e),
                 }
             )
@@ -193,8 +189,8 @@ class RequestLoggingMiddleware:
                 extra={
                     'request_id': request_id,
                     'client_ip': client_ip,
-                    'endpoint': request.url.path,
-                    'method': request.method,
+                    'endpoint': endpoint,
+                    'method': method,
                     'duration_ms': round(duration_ms, 2),
                 }
             )
@@ -305,7 +301,7 @@ def log_warning(
             'request_id': request_id,
             'endpoint': endpoint,
             'method': method,
-            'message': message,
+            'detail': message,
         }
     )
 
@@ -550,14 +546,10 @@ def health():
 @app.post("/v1/messages")
 async def proxy_handler(request: Request):
     try:
-        # Extract request context for logging
-        request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-        client_ip = request.client.host if request.client else "unknown"
+        # Retrieve context from middleware state
+        request_id = request.state.request_id
         endpoint = request.url.path
         method = request.method
-
-        # Log request start with context
-        start_time = log_request_start(request_id, endpoint, method)
 
         # Rate limiting check
         if not rate_limiter.is_allowed():
@@ -649,7 +641,7 @@ async def proxy_handler(request: Request):
                     last_calls = current_calls
         
         if repeats >= 2:
-            logger.warning(f"CIRCUIT BREAKER: Detected {repeats} redundant tool calls. Injecting warning.")
+            log_warning(request_id, endpoint, method, f"CIRCUIT BREAKER: Detected {repeats} redundant tool calls. Injecting warning.")
             final_sys += (
                 "\n\n[CIRCUIT BREAKER WARNING]\n"
                 "You are repeating the same tool calls or reading the same file multiple times without progress. "
