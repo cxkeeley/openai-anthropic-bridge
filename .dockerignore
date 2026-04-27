@@ -1,5 +1,11 @@
+# Ignore source files to force the use of the compiled .so binary
 fastapi_bridge.py
 fastapi_bridge.c
 setup_cython.py
+
+# Ignore build artifacts
 build/
 __pycache__/
+.git/
+.env
+bridge.log
