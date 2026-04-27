@@ -8,12 +8,16 @@ This repository contains a robust bridge application that allows you to use the 
 - **Model Parameters**: Configurable model parameters (temperature, max_tokens, penalties) via `JTIU_MODEL_PARAMS`
 - **Rate Limiting**: Optional rate limiting with configurable requests per window
 - **Docker Compose Ready**: One-click containerization with `gunicorn` for parallel thread processing
-- **Auto-Healing Streams**: Real-time bracket interpolation fixes tokenization glitches during Server-Sent Event (SSE) streaming
-- **Localization Override**: Forces the native model to communicate in strict English rather than Chinese defaults
+- **Tool Call ID Pinning**: Preserves upstream tool call IDs to prevent the infinite execution loops common in high-concurrency environments (e.g., H200 inference).
+- **Hallucinated Argument Stripping**: Aggressively strips hallucinated `status` fields and other metadata from tool calls to ensure schema compliance with the Claude Code CLI.
+- **Empty Argument Guard**: Automatically injects safe defaults (e.g., `path: "."` for `ls`) when the model sends empty tool arguments, preventing CLI hangs.
+- **Intelligent Argument Mapping**: Robustly maps common model hallucinations (e.g., mapping `TargetFile` or `AbsolutePath` to `file_path`) to the standard tool schema.
+- **Auto-Healing Streams**: Real-time bracket interpolation fixes tokenization glitches during Server-Sent Event (SSE) streaming.
+- **Localization Override**: Forces the native model to communicate in strict English rather than Chinese defaults.
 
 ## Prerequisites
 
-- Python 3.12+ (For local bare-metal run)
+- Python 3.10+ (For local bare-metal run)
 - Docker & Docker Compose (Recommended)
 
 ## Installation
