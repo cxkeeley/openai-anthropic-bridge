@@ -10,10 +10,21 @@ import re
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.exceptions import RequestValidationError
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
+from pydantic import BaseModel, ConfigDict
 
 load_dotenv()
+
+class AnthropicMessage(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    role: str
+    content: Any
+
+class AnthropicRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+    messages: List[AnthropicMessage]
 
 # --- 1. Logging ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -108,6 +119,9 @@ RATE_LIMIT_WINDOW = float(os.environ.get("JTIU_RATE_LIMIT_WINDOW", "60.0"))
 
 # Model Parameters Configuration
 MODEL_PARAMS = os.environ.get("JTIU_MODEL_PARAMS", "")
+
+# Upstream Configuration
+UPSTREAM_TIMEOUT = float(os.environ.get("JTIU_UPSTREAM_TIMEOUT", "600.0"))
 
 # --- 3. Rate Limiter ---
 class RateLimiter:
@@ -355,10 +369,10 @@ def get_model_params() -> Dict[str, Any]:
     # Default model parameters
     return {
         "text": {
-            "temperature": 0.1,
-            "max_tokens": 16384,
-            "presence_penalty": 0.2,
-            "frequency_penalty": 0.2,
+            "temperature": 0.0,
+            "max_tokens": 131072,
+            "presence_penalty": 0.0,
+            "frequency_penalty": 0.0,
             "top_p": 0.95
         }
     }
@@ -491,6 +505,34 @@ app = FastAPI()
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    log_error(
+        getattr(request.state, "request_id", "unknown"),
+        request.url.path,
+        request.method,
+        f"Validation Error: {exc.errors()}",
+        400
+    )
+    return JSONResponse(
+        status_code=400,
+        content={"error": {"message": "Invalid request payload", "details": exc.errors()}}
+    )
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    log_error(
+        getattr(request.state, "request_id", "unknown"),
+        request.url.path,
+        request.method,
+        f"Internal Server Error: {str(exc)}",
+        500
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"message": "Internal Server Error", "details": str(exc)}}
+    )
+
 @app.get("/")
 async def root():
     return {"status": "online", "bridge": "openai-anthropic", "model": MODEL_NAME}
@@ -544,7 +586,7 @@ def health():
     return JSONResponse(health_status, status_code=status_code)
 
 @app.post("/v1/messages")
-async def proxy_handler(request: Request):
+async def proxy_handler(payload: AnthropicRequest, request: Request):
     try:
         # Retrieve context from middleware state
         request_id = request.state.request_id
@@ -561,7 +603,7 @@ async def proxy_handler(request: Request):
                 headers={"Retry-After": str(retry_after)}
             )
 
-        body = await request.json()
+        body = payload.model_dump(mode='json')
         tools_list = {}
         for t in body.get("tools", []):
             tool_name = t.get("name", "")
@@ -632,7 +674,7 @@ async def proxy_handler(request: Request):
             "    - If stuck reading the same file: trust what you already read and proceed to write the fix.\n"
             "\n"
             "=== STANDARD (apply when relevant) ===\n"
-            "S1. SILENT REASONING: Internally decide which tool to use before invoking. Only narrate reasoning if the user asks 'why'.\n"
+            "S1. THINK OUT LOUD: ALWAYS write a brief, 1-sentence explanation of what you are about to do BEFORE calling any tool. This provides the user with visual progress and prevents the terminal from appearing frozen.\n"
             "S2. NO PLACEHOLDERS: Never emit '...', 'content remains same', or partial code. Always provide complete, working blocks.\n"
             "S3. OUTPUT LANGUAGE: Always respond in English regardless of the language of the system prompt or user content.\n"
             "S4. TOOL RESULT TRUST: Treat tool results as ground truth. Do not contradict a tool result with a prior assumption.\n"
@@ -715,7 +757,7 @@ async def proxy_handler(request: Request):
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
 
             block_idx, text_started, active_tools, tool_results = 0, False, {}, []
-            async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=httpx.Timeout(600.0)) as client:
+            async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=httpx.Timeout(UPSTREAM_TIMEOUT)) as client:
                 try:
                     async with client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:
                         if resp.status_code != 200:
