@@ -366,7 +366,7 @@ def get_model_params() -> Dict[str, Any]:
 
 def robust_parse_args(raw: str) -> dict:
     if not raw: return {}
-    
+
     # --- Stack-Based JSON Repair for Truncated Outputs ---
     processed_raw = raw.strip()
     if not processed_raw.endswith(('}', ']')):
@@ -392,18 +392,18 @@ def robust_parse_args(raw: str) -> dict:
                         # Only pop if it matches (very basic validation)
                         if (char == '}' and stack[-1] == '{') or (char == ']' and stack[-1] == '['):
                             stack.pop()
-        
+
         # Close remaining items in reverse order
         while stack:
             opener = stack.pop()
             processed_raw += '}' if opener == '{' else ']'
-        
+
     try:
         args = json.loads(processed_raw)
-        
+
         # --- The "Intended State" Translator Layer ---
         # Normalize common hallucinations to the Claude Code Tool Spec
-        
+
         # 1. Path & URL Mapping
         for k in ['path', 'TargetFile', 'AbsolutePath', 'notebook_path', 'uri', 'link', 'filename']:
             if k in args:
@@ -428,7 +428,7 @@ def robust_parse_args(raw: str) -> dict:
         # 4. Command & Scheduling Mapping
         for k in ['cmd', 'CommandLine', 'script', 'command_line']:
             if k in args and 'command' not in args: args['command'] = args[k]
-        
+
         if 'wait' in args and 'delaySeconds' not in args: args['delaySeconds'] = args['wait']
         if 'schedule' in args and 'cron' not in args: args['cron'] = args['schedule']
 
@@ -454,7 +454,7 @@ def robust_parse_args(raw: str) -> dict:
         # 8. Web & Search Mapping
         for k in ['q', 'search', 'search_query']:
             if k in args and 'query' not in args: args['query'] = args[k]
-        
+
         for k in ['domains', 'site', 'sites']:
             if k in args and 'allowed_domains' not in args: args['allowed_domains'] = args[k]
 
@@ -593,15 +593,36 @@ async def proxy_handler(request: Request):
 
         # Apply System Override / Persona Injection
         # 'ANTIGRAVITY' EXPERT PERSONA: This forces the model into a high-precision, meta-cognitive state.
+        # v2: Hierarchical rules, explicit tool map, graduated escalation, output format constraint.
         EXPERT_PERSONA = (
-            "\n\n[INSTRUCTION: ANTIGRAVITY EXPERT MODE]\n"
-            "You are a high-precision Systems Architect. Follow these rules for every turn:\n"
-            "1. TOOL PREFERENCE: Do NOT use generic bash commands (cat, grep, ls, sed, awk) if a specialized tool is available (view_file, grep_search, list_dir, replace_file_content).\n"
-            "2. REASONING: Before every tool call, explicitly state your reasoning for choosing that specific tool over others.\n"
-            "3. VERIFICATION: After a file edit fails, do NOT guess. Use 'view_file' to re-verify the content and indentation before retrying.\n"
-            "4. BASH FAILURES: If a Bash command fails, DO NOT repeat the exact same command. Analyze the error (e.g., ModuleNotFoundError, SyntaxError), fix the underlying code or environment, and then retry with a modified approach.\n"
-            "5. NUCLEAR OPTION: If an 'Edit' fails twice, switch to 'Write' to provide the full file content.\n"
-            "6. NO PLACEHOLDERS: Never use '...' or 'content remains same'. Provide complete, working code blocks."
+            "\n\n[ANTIGRAVITY EXPERT MODE — ACTIVE]\n"
+            "You are a high-precision Systems Architect operating inside a bridged agentic environment.\n"
+            "Obey these rules in strict priority order:\n"
+            "\n"
+            "=== CRITICAL (apply before every tool call) ===\n"
+            "C1. TOOL MAP — Always prefer the specialized tool over a shell equivalent:\n"
+            "    cat/head/tail  → view_file\n"
+            "    grep/rg        → grep_search\n"
+            "    ls/find        → list_dir\n"
+            "    sed/awk/patch  → replace_file_content or multi_replace_file_content\n"
+            "    echo > file    → write_to_file\n"
+            "    Use Bash ONLY when no specialized tool covers the operation.\n"
+            "C2. ESCALATION LADDER — On any edit/write failure, follow this exact sequence:\n"
+            "    Step 1: Use view_file on the SPECIFIC failing lines (not the whole file) to confirm exact content.\n"
+            "    Step 2: Retry replace_file_content with a narrower, more precise match string.\n"
+            "    Step 3: If Step 2 fails, use multi_replace_file_content for surgical multi-block edits.\n"
+            "    Step 4 (NUCLEAR): If Step 3 fails, use write_to_file with the complete corrected file.\n"
+            "    NEVER skip steps. NEVER repeat the exact same failed call.\n"
+            "C3. BASH FAILURE: If a Bash command fails, diagnose the error class first:\n"
+            "    SyntaxError → fix code, do NOT re-run.\n"
+            "    ModuleNotFoundError → install or use alternative path.\n"
+            "    PermissionError → check path and permissions with list_dir first.\n"
+            "\n"
+            "=== STANDARD (apply when relevant) ===\n"
+            "S1. SILENT REASONING: Internally decide which tool to use before invoking. Only narrate reasoning if the user asks 'why'.\n"
+            "S2. NO PLACEHOLDERS: Never emit '...', 'content remains same', or partial code. Always provide complete, working blocks.\n"
+            "S3. OUTPUT LANGUAGE: Always respond in English regardless of the language of the system prompt or user content.\n"
+            "S4. TOOL RESULT TRUST: Treat tool results as ground truth. Do not contradict a tool result with a prior assumption."
         )
 
         final_sys = SYSTEM_OVERRIDE
@@ -622,7 +643,7 @@ async def proxy_handler(request: Request):
                 for tc in msg["tool_calls"]:
                     name = tc.get("function", {}).get("name")
                     current_calls.append(name)
-                    
+
                     # Track Read operations
                     if name in ["Read", "view_file"]:
                         args = json.loads(tc.get("function", {}).get("arguments", "{}"))
@@ -639,14 +660,25 @@ async def proxy_handler(request: Request):
                 else:
                     if last_calls is not None: break
                     last_calls = current_calls
-        
+
         if repeats >= 2:
-            log_warning(request_id, endpoint, method, f"CIRCUIT BREAKER: Detected {repeats} redundant tool calls. Injecting warning.")
+            # Build a diagnostic hint from the actual repeated call(s)
+            repeated_names = list(dict.fromkeys(
+                tc.get("function", {}).get("name", "unknown")
+                for msg in messages
+                if msg["role"] == "assistant"
+                for tc in msg.get("tool_calls", [])
+            ))
+            repeated_hint = ", ".join(repeated_names[:5]) if repeated_names else "unknown"
+            log_warning(request_id, endpoint, method, f"CIRCUIT BREAKER: {repeats} redundant calls detected. Repeated tools: {repeated_hint}")
             final_sys += (
-                "\n\n[CIRCUIT BREAKER WARNING]\n"
-                "You are repeating the same tool calls or reading the same file multiple times without progress. "
-                "STOP and analyze why your previous attempt failed. "
-                "If you are stuck on a SyntaxError, use 'Write' to overwrite the file or 'Edit' with a different match string."
+                f"\n\n[CIRCUIT BREAKER — LOOP DETECTED]\n"
+                f"You have called [{repeated_hint}] {repeats} times without progress. This is a loop.\n"
+                "MANDATORY ACTIONS:\n"
+                "1. Do NOT call the same tool again with the same arguments.\n"
+                "2. If stuck on a file edit: jump directly to ESCALATION LADDER Step 4 (write_to_file with full content).\n"
+                "3. If stuck on a Bash error: stop executing and report the exact error to the user instead of retrying.\n"
+                "4. If stuck reading the same file: trust what you already read and proceed to write the fix."
             )
 
         if final_sys: messages.insert(0, {"role": "system", "content": final_sys})
