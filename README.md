@@ -5,6 +5,7 @@ This repository contains a robust bridge application that allows you to use the 
 ## Features
 
 - **Dual API Support**: Native Anthropic API (`/v1/messages`) and OpenAI-compatible (`/v1/chat/completions`) endpoints
+- **Antigravity Expert Mode**: High-precision "Antigravity Expert Mode" with hierarchical rules for tool selection, escalation ladders for failures, and circuit breakers to detect and break agentic loops
 - **Model Parameters**: Configurable model parameters (temperature, max_tokens, penalties) via `JTIU_MODEL_PARAMS`
 - **Rate Limiting**: Optional rate limiting with configurable requests per window
 - **Docker Compose Ready**: One-click containerization with `gunicorn` for parallel thread processing
@@ -53,7 +54,7 @@ docker compose logs -f
 If you wish to run the app manually without Docker:
 ```bash
 pip install -r requirements.txt
-./start_claude_bridge.sh
+./start_fastapi_bridge.sh
 ```
 
 ## Configure Environment (.env)
@@ -91,12 +92,14 @@ claude
 
 ## Project Structure
 
-- `claude_bridge.py`: Main application with enhanced error handling and configuration
-- `simple_bridge.py`: Basic implementation of the bridge functionality
+- `fastapi_bridge.py`: Main FastAPI application with Antigravity Expert Mode
+- `start_fastapi_bridge.sh`: Enhanced startup script for FastAPI bridge
 - `start_claude_bridge.sh`: Enhanced startup script with better configuration options
 - `test_claude_bridge.py`: Comprehensive test suite for the bridge
 - `test-jiutien.py`: Additional test script for the JiuTian model
 - `requirements.txt`: Python dependencies
+- `docker-compose.yml`: Docker Compose configuration
+- `Dockerfile`: Docker image definition
 - `.env.example`: Example environment configuration file
 - `.claude/`: Claude Code project settings (optional)
 
