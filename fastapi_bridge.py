@@ -355,11 +355,11 @@ def get_model_params() -> Dict[str, Any]:
     # Default model parameters
     return {
         "text": {
-            "temperature": 0.2,
-            "max_tokens": 8192,
-            "presence_penalty": 1.1,
-            "frequency_penalty": 0.3,
-            "top_p": 0.9
+            "temperature": 0.1,
+            "max_tokens": 16384,
+            "presence_penalty": 0.2,
+            "frequency_penalty": 0.2,
+            "top_p": 0.95
         }
     }
 
