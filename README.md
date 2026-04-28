@@ -94,14 +94,14 @@ claude
 
 - `fastapi_bridge.py`: Main FastAPI application with Antigravity Expert Mode
 - `start_fastapi_bridge.sh`: Enhanced startup script for FastAPI bridge
-- `start_claude_bridge.sh`: Enhanced startup script with better configuration options
-- `test_claude_bridge.py`: Comprehensive test suite for the bridge
-- `test-jiutien.py`: Additional test script for the JiuTian model
+- `start_claude.sh`: Alternative startup script
 - `requirements.txt`: Python dependencies
 - `docker-compose.yml`: Docker Compose configuration
 - `Dockerfile`: Docker image definition
 - `.env.example`: Example environment configuration file
 - `.claude/`: Claude Code project settings (optional)
+- `legacy/`: Legacy code directory
+- `test/`: Test files directory
 
 ## Troubleshooting
 
