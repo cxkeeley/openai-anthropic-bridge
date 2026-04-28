@@ -7,15 +7,15 @@ This bridge is for **internal/local use only** - users run it locally to connect
 - Not exposed publicly
 
 ## Priority 1: Request Validation & Reliability
-- [ ] Add request validation for incoming requests (malformed requests)
-- [ ] Add per-request timeout (currently uses default httpx timeout)
+- [x] Add request validation for incoming requests (malformed requests)
+- [x] Add per-request timeout (currently uses default httpx timeout)
 - [ ] Add graceful shutdown handling
 - [ ] Add retry logic with exponential backoff for transient failures
 - [ ] Add request/response size limits to prevent OOM
 
 ## Priority 2: Observability
 - [ ] Add metrics/export (Prometheus metrics endpoint)
-- [ ] Add structured error responses with error codes
+- [x] Add structured error responses with error codes
 - [ ] Add request/response logging level configuration
 - [ ] Add circuit breaker metrics (success/failure counts)
 
