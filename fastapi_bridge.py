@@ -146,6 +146,7 @@ class NetworkCircuitBreaker:
         self.timeout = timeout_sec
         self.total_requests = 0
         self.total_failures = 0
+        self.total_latency_ms = 0.0
 
     def record_success(self):
         self.total_requests += 1
@@ -251,6 +252,7 @@ class RequestLoggingMiddleware:
             raise
         finally:
             duration_ms = (time.time() - start_time) * 1000
+            circuit_breaker.total_latency_ms += duration_ms
             logger.info(
                 f"Request completed",
                 extra={
@@ -613,6 +615,7 @@ async def get_metrics():
     metrics = [
         f'bridge_requests_total {circuit_breaker.total_requests}',
         f'bridge_failures_total {circuit_breaker.total_failures}',
+        f'bridge_request_latency_ms_sum {circuit_breaker.total_latency_ms}',
         f'bridge_circuit_breaker_state{{state="{circuit_breaker.state}"}} 1',
         f'bridge_active_connections {active_connections}'
     ]
