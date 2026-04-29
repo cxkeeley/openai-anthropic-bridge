@@ -8,7 +8,7 @@ import sys
 import uuid
 import re
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from typing import List, Dict, Any, Optional
@@ -134,7 +134,49 @@ RETRY_MAX_ATTEMPTS = int(os.environ.get("JTIU_RETRY_MAX_ATTEMPTS", "3"))
 RETRY_BASE_DELAY = float(os.environ.get("JTIU_RETRY_BASE_DELAY", "1.0"))
 MAX_PAYLOAD_SIZE = int(os.environ.get("JTIU_MAX_PAYLOAD_SIZE", "10485760")) # 10MB default
 
+# --- 3. Network Circuit Breaker ---
+class NetworkCircuitBreaker:
+    """Network Circuit Breaker for Upstream connections"""
+    def __init__(self, threshold: int = 5, timeout_sec: int = 30):
+        self.state = "closed"
+        self.failure_count = 0
+        self.success_count = 0
+        self.last_failure_time = 0.0
+        self.threshold = threshold
+        self.timeout = timeout_sec
+        self.total_requests = 0
+        self.total_failures = 0
+
+    def record_success(self):
+        self.total_requests += 1
+        self.success_count += 1
+        if self.state == "half-open":
+            self.state = "closed"
+        self.failure_count = 0
+
+    def record_failure(self):
+        self.total_requests += 1
+        self.total_failures += 1
+        self.failure_count += 1
+        self.last_failure_time = time.time()
+        if self.failure_count >= self.threshold:
+            self.state = "open"
+
+    def can_request(self) -> bool:
+        if self.state == "closed":
+            return True
+        if self.state == "open":
+            if time.time() - self.last_failure_time >= self.timeout:
+                self.state = "half-open"
+                return True
+            return False
+        return True
+
+# Global circuit breaker
+circuit_breaker = NetworkCircuitBreaker()
+
 # --- 3. Rate Limiter ---
+
 class RateLimiter:
     """Simple sliding window rate limiter"""
     def __init__(self, max_requests: int, window_seconds: float):
@@ -566,7 +608,18 @@ async def global_exception_handler(request: Request, exc: Exception):
 async def root():
     return {"status": "online", "bridge": "openai-anthropic", "model": MODEL_NAME}
 
+@app.get("/metrics")
+async def get_metrics():
+    metrics = [
+        f'bridge_requests_total {circuit_breaker.total_requests}',
+        f'bridge_failures_total {circuit_breaker.total_failures}',
+        f'bridge_circuit_breaker_state{{state="{circuit_breaker.state}"}} 1',
+        f'bridge_active_connections {active_connections}'
+    ]
+    return PlainTextResponse("\n".join(metrics) + "\n")
+
 @app.get("/health")
+
 def health():
     # Rate limiting check for health endpoint
     if not rate_limiter.is_allowed():
@@ -784,6 +837,10 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
         }
 
         async def _internal_stream_gen():
+            if not circuit_breaker.can_request():
+                yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": "Error: Circuit Breaker OPEN. Upstream service is temporarily unreachable."}})}\n\n'
+                return
+
             msg_id = f"msg_{uuid.uuid4().hex}"
             input_tokens, output_tokens = 0, 0
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
@@ -793,6 +850,8 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                 try:
                     async with http_client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:
                         if resp.status_code != 200:
+                            if resp.status_code >= 500:
+                                circuit_breaker.record_failure()
                             if resp.status_code in [502, 503, 504] and attempt < RETRY_MAX_ATTEMPTS - 1:
                                 delay = RETRY_BASE_DELAY * (2 ** attempt)
                                 log_warning(request_id, endpoint, method, f"Upstream 50x error ({resp.status_code}), retrying in {delay}s...")
@@ -863,8 +922,10 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                                             yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": arg_chunk}})}\n\n'
                                 except Exception as e:
                                     log_error(request_id, endpoint, method, f"Stream Parse Error: {e} | Data: {data_str}")
+                    circuit_breaker.record_success()
                     break
                 except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+                    circuit_breaker.record_failure()
                     if attempt < RETRY_MAX_ATTEMPTS - 1:
                         delay = RETRY_BASE_DELAY * (2 ** attempt)
                         log_warning(request_id, endpoint, method, f"Connection error ({str(e)}), retrying in {delay}s...")
