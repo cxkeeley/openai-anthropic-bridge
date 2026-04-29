@@ -16,7 +16,7 @@ This bridge is for **internal/local use only** - users run it locally to connect
 ## Priority 2: Observability
 - [x] Add metrics/export (Prometheus metrics endpoint)
 - [x] Add structured error responses with error codes
-- [ ] Add request/response logging level configuration
+- [x] Add request/response logging level configuration
 - [x] Add circuit breaker metrics (success/failure counts)
 
 ## Priority 3: Configuration

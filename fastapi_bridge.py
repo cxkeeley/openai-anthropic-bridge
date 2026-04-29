@@ -94,16 +94,19 @@ if LOG_DIR and not os.path.exists(LOG_DIR):
     os.makedirs(LOG_DIR, exist_ok=True)
 
 # Configure logging
+LOG_LEVEL_STR = os.environ.get("JTIU_LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = getattr(logging, LOG_LEVEL_STR, logging.INFO)
+
 log_formatter = StructuredLogFormatter()
 file_handler = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=10*1024*1024, backupCount=3)
 file_handler.setFormatter(log_formatter)
-file_handler.setLevel(logging.INFO)
+file_handler.setLevel(LOG_LEVEL)
 stream_handler = logging.StreamHandler(sys.stdout)
 stream_handler.setFormatter(log_formatter)
-stream_handler.setLevel(logging.INFO)
+stream_handler.setLevel(LOG_LEVEL)
 
 # Configure root logger
-logging.basicConfig(level=logging.INFO, handlers=[file_handler, stream_handler], force=True)
+logging.basicConfig(level=LOG_LEVEL, handlers=[file_handler, stream_handler], force=True)
 logger = logging.getLogger("Bridge")
 logger.info(f"BRIDGE LOGGING TO: {LOG_PATH}")
 
