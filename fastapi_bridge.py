@@ -130,6 +130,9 @@ MODEL_PARAMS = os.environ.get("JTIU_MODEL_PARAMS", "")
 
 # Upstream Configuration
 UPSTREAM_TIMEOUT = float(os.environ.get("JTIU_UPSTREAM_TIMEOUT", "600.0"))
+RETRY_MAX_ATTEMPTS = int(os.environ.get("JTIU_RETRY_MAX_ATTEMPTS", "3"))
+RETRY_BASE_DELAY = float(os.environ.get("JTIU_RETRY_BASE_DELAY", "1.0"))
+MAX_PAYLOAD_SIZE = int(os.environ.get("JTIU_MAX_PAYLOAD_SIZE", "10485760")) # 10MB default
 
 # --- 3. Rate Limiter ---
 class RateLimiter:
@@ -786,12 +789,21 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
 
             block_idx, text_started, active_tools, tool_results = 0, False, {}, []
-            if True:
+            for attempt in range(RETRY_MAX_ATTEMPTS):
                 try:
                     async with http_client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:
                         if resp.status_code != 200:
-                            err_body = await resp.aread()
-                            log_error(request_id, endpoint, method, f"Upstream Error {resp.status_code}: {err_body.decode()}")
+                            if resp.status_code in [502, 503, 504] and attempt < RETRY_MAX_ATTEMPTS - 1:
+                                delay = RETRY_BASE_DELAY * (2 ** attempt)
+                                log_warning(request_id, endpoint, method, f"Upstream 50x error ({resp.status_code}), retrying in {delay}s...")
+                                import asyncio
+                                await asyncio.sleep(delay)
+                                continue
+                            
+                            # Limit reading to prevent OOM on massive error pages
+                            err_chunk = await resp.aread()
+                            err_body = err_chunk[:4096] # 4KB max
+                            log_error(request_id, endpoint, method, f"Upstream Error {resp.status_code}: {err_body.decode(errors='replace')}")
                             yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": f"Error from upstream: {resp.status_code}"}})}\n\n'
                             return
 
@@ -851,6 +863,16 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                                             yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": arg_chunk}})}\n\n'
                                 except Exception as e:
                                     log_error(request_id, endpoint, method, f"Stream Parse Error: {e} | Data: {data_str}")
+                    break
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as e:
+                    if attempt < RETRY_MAX_ATTEMPTS - 1:
+                        delay = RETRY_BASE_DELAY * (2 ** attempt)
+                        log_warning(request_id, endpoint, method, f"Connection error ({str(e)}), retrying in {delay}s...")
+                        import asyncio
+                        await asyncio.sleep(delay)
+                    else:
+                        log_error(request_id, endpoint, method, f"Connection Failed after {RETRY_MAX_ATTEMPTS} attempts: {str(e)}")
+                        yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": block_idx, "content_block": {"type": "text", "text": f"Connection Failed: {str(e)}"}})}\n\n'
                 except Exception as e:
                     log_error(request_id, endpoint, method, f"Connection Error: {e}")
                     yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": block_idx, "content_block": {"type": "text", "text": f"Connection Error: {str(e)}"}})}\n\n'
