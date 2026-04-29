@@ -14,6 +14,8 @@ from fastapi.exceptions import RequestValidationError
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict
+from contextlib import asynccontextmanager
+import asyncio
 
 load_dotenv()
 
@@ -25,6 +27,12 @@ class AnthropicMessage(BaseModel):
 class AnthropicRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
     messages: List[AnthropicMessage]
+
+# --- Global State ---
+http_client: Optional[httpx.AsyncClient] = None
+shutdown_event = asyncio.Event()
+active_connections = 0
+
 
 # --- 1. Logging ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -501,7 +509,25 @@ def merge_messages(messages: List[Dict[Any, Any]]) -> List[Dict[Any, Any]]:
     return merged
 
 # --- 4. Server ---
-app = FastAPI()
+async def _wait_for_connections():
+    global active_connections
+    while active_connections > 0:
+        await asyncio.sleep(0.5)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global http_client
+    http_client = httpx.AsyncClient(verify=SSL_VERIFY, timeout=httpx.Timeout(UPSTREAM_TIMEOUT))
+    yield
+    shutdown_event.set()
+    try:
+        await asyncio.wait_for(_wait_for_connections(), timeout=10.0)
+    except asyncio.TimeoutError:
+        pass
+    if http_client:
+        await http_client.aclose()
+
+app = FastAPI(lifespan=lifespan)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -587,6 +613,9 @@ def health():
 
 @app.post("/v1/messages")
 async def proxy_handler(payload: AnthropicRequest, request: Request):
+    if shutdown_event.is_set():
+        return JSONResponse({"error": {"message": "Server is shutting down"}}, status_code=503)
+
     try:
         # Retrieve context from middleware state
         request_id = request.state.request_id
@@ -751,15 +780,15 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             "model_params": model_params
         }
 
-        async def stream_gen():
+        async def _internal_stream_gen():
             msg_id = f"msg_{uuid.uuid4().hex}"
             input_tokens, output_tokens = 0, 0
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
 
             block_idx, text_started, active_tools, tool_results = 0, False, {}, []
-            async with httpx.AsyncClient(verify=SSL_VERIFY, timeout=httpx.Timeout(UPSTREAM_TIMEOUT)) as client:
+            if True:
                 try:
-                    async with client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:
+                    async with http_client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:
                         if resp.status_code != 200:
                             err_body = await resp.aread()
                             log_error(request_id, endpoint, method, f"Upstream Error {resp.status_code}: {err_body.decode()}")
@@ -768,6 +797,8 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
 
                         parser = SSEParser()
                         async for chunk in resp.aiter_bytes():
+                            if shutdown_event.is_set():
+                                break
                             for data_str in parser.feed(chunk):
                                 if data_str == "[DONE]": break
                                 try:
@@ -865,6 +896,15 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             # Finalize the message with actual usage
             yield f'event: message_delta\ndata: {json.dumps({"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None}, "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}})}\n\n'
             yield f'event: message_stop\ndata: {json.dumps({"type": "message_stop"})}\n\n'
+
+        async def stream_gen():
+            global active_connections
+            active_connections += 1
+            try:
+                async for chunk in _internal_stream_gen():
+                    yield chunk
+            finally:
+                active_connections -= 1
 
         return StreamingResponse(stream_gen(), media_type="text/event-stream")
     except Exception as e:
