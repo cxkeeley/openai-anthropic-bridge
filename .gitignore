@@ -4,6 +4,7 @@
 
 # Claude Code Configuration
 .claude/
+!.claude/settings.json
 
 # Logs
 *.log
