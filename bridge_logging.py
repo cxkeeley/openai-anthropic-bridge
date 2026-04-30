@@ -92,22 +92,37 @@ class ChimeraLogger:
 
     def info(self, message: str, **kwargs):
         """Log an info message with optional extra fields"""
+        extra = kwargs.pop('extra', {})
+        if isinstance(extra, dict):
+            kwargs.update(extra)
         self.logger.info(message, extra=kwargs)
 
     def error(self, message: str, **kwargs):
         """Log an error message with optional extra fields"""
+        extra = kwargs.pop('extra', {})
+        if isinstance(extra, dict):
+            kwargs.update(extra)
         self.logger.error(message, extra=kwargs)
 
     def warning(self, message: str, **kwargs):
         """Log a warning message with optional extra fields"""
+        extra = kwargs.pop('extra', {})
+        if isinstance(extra, dict):
+            kwargs.update(extra)
         self.logger.warning(message, extra=kwargs)
 
     def debug(self, message: str, **kwargs):
         """Log a debug message with optional extra fields"""
+        extra = kwargs.pop('extra', {})
+        if isinstance(extra, dict):
+            kwargs.update(extra)
         self.logger.debug(message, extra=kwargs)
 
     def critical(self, message: str, **kwargs):
         """Log a critical message with optional extra fields"""
+        extra = kwargs.pop('extra', {})
+        if isinstance(extra, dict):
+            kwargs.update(extra)
         self.logger.critical(message, extra=kwargs)
 
     def get_underlying_logger(self) -> logging.Logger:

@@ -8,7 +8,7 @@ python3 setup_cython.py build_ext --inplace
 
 # Cleanup intermediate files
 echo "🧹 Cleaning up intermediate build files..."
-rm -rf build/ fastapi_bridge.c
+rm -rf build/ fastapi_bridge.c bridge_logging.c
 
 echo "🚀 Starting Docker Compose deployment..."
 docker compose up -d --build
