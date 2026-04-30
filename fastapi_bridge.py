@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
+from bridge_logging import ChimeraLogger
 from pydantic import BaseModel, ConfigDict
 from contextlib import asynccontextmanager
 import asyncio
@@ -35,86 +36,8 @@ active_connections = 0
 
 
 # --- 1. Logging ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_PATH = os.path.join(BASE_DIR, "bridge.log")
-
-# Auto-cleanup if Docker/System created a directory named 'bridge.log'
-if os.path.isdir(LOG_PATH):
-    import shutil
-    shutil.rmtree(LOG_PATH)
-
-# Structured logging formatter with request context
-class StructuredLogFormatter(logging.Formatter):
-    """Custom formatter that adds request context for structured logging"""
-
-    def format(self, record: logging.LogRecord) -> str:
-        # Add request context if available
-        request_id = getattr(record, 'request_id', 'N/A')
-        client_ip = getattr(record, 'client_ip', 'N/A')
-
-        # Create structured JSON-like format
-        log_entry = {
-            'timestamp': self.formatTime(record, self.datefmt),
-            'level': record.levelname,
-            'logger': record.name,
-            'request_id': request_id,
-            'client_ip': client_ip,
-            'message': record.getMessage()
-        }
-
-        # Add extra fields if present
-        if hasattr(record, 'detail'):
-            log_entry['detail'] = record.detail
-        if hasattr(record, 'error'):
-            log_entry['error'] = record.error
-        if hasattr(record, 'endpoint'):
-            log_entry['endpoint'] = record.endpoint
-        if hasattr(record, 'method'):
-            log_entry['method'] = record.method
-        if hasattr(record, 'status_code'):
-            log_entry['status_code'] = record.status_code
-        if hasattr(record, 'duration_ms'):
-            log_entry['duration_ms'] = record.duration_ms
-        if hasattr(record, 'response_size'):
-            log_entry['response_size'] = record.response_size
-
-        return json.dumps(log_entry, indent=None, separators=(',', ':'))
-
-    def formatException(self, ei):
-        if ei[0]:
-            return f"\n{self.formatExceptionName(ei[0])}: {ei[1]}"
-        return ""
-
-    def formatExceptionName(self, ei):
-        return ei[0].__name__ if ei[0] else "Exception"
-
-# Create log directory if it doesn't exist
-LOG_DIR = os.path.dirname(LOG_PATH)
-if LOG_DIR and not os.path.exists(LOG_DIR):
-    os.makedirs(LOG_DIR, exist_ok=True)
-
-# Configure logging
-LOG_LEVEL_STR = os.environ.get("JTIU_LOG_LEVEL", "INFO").upper()
-LOG_LEVEL = getattr(logging, LOG_LEVEL_STR, logging.INFO)
-
-log_formatter = StructuredLogFormatter()
-file_handler = logging.handlers.RotatingFileHandler(LOG_PATH, maxBytes=10*1024*1024, backupCount=3)
-file_handler.setFormatter(log_formatter)
-file_handler.setLevel(LOG_LEVEL)
-stream_handler = logging.StreamHandler(sys.stdout)
-stream_handler.setFormatter(log_formatter)
-stream_handler.setLevel(LOG_LEVEL)
-
-# Configure root logger
-logging.basicConfig(level=LOG_LEVEL, handlers=[file_handler, stream_handler], force=True)
-logger = logging.getLogger("Bridge")
-logger.info(f"BRIDGE LOGGING TO: {LOG_PATH}")
-
-# Silence noisy dependency logs
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
-logging.getLogger("uvicorn").setLevel(logging.WARNING)
-logging.getLogger("fastapi").setLevel(logging.WARNING)
+# Logging is now handled by bridge_logging.py
+# This file imports ChimeraLogger from bridge_logging
 
 # --- 2. Configuration ---
 TARGET_URL = os.environ.get("JTIU_TARGET_URL", "")
@@ -242,7 +165,7 @@ class RequestLoggingMiddleware:
         try:
             await self.app(scope, receive, send)
         except Exception as e:
-            logger.error(
+            ChimeraLogger.error(
                 f"Request failed",
                 extra={
                     'request_id': request_id,
@@ -256,7 +179,7 @@ class RequestLoggingMiddleware:
         finally:
             duration_ms = (time.time() - start_time) * 1000
             circuit_breaker.total_latency_ms += duration_ms
-            logger.info(
+            ChimeraLogger.info(
                 f"Request completed",
                 extra={
                     'request_id': request_id,
@@ -279,7 +202,7 @@ def log_request_start(request_id: str, endpoint: str, method: str) -> float:
     Returns:
         Start time for duration calculation
     """
-    logger.info(
+    ChimeraLogger.info(
         f"Request started",
         extra={
             'request_id': request_id,
@@ -310,7 +233,7 @@ def log_request_end(
         response_size: Response size in bytes
     """
     duration_ms = (time.time() - start_time) * 1000
-    logger.info(
+    ChimeraLogger.info(
         f"Request completed",
         extra={
             'request_id': request_id,
@@ -340,7 +263,7 @@ def log_error(
         error: Error message
         status_code: HTTP status code
     """
-    logger.error(
+    ChimeraLogger.error(
         f"Request failed",
         extra={
             'request_id': request_id,
@@ -367,7 +290,7 @@ def log_warning(
         method: HTTP method
         message: Warning message
     """
-    logger.warning(
+    ChimeraLogger.warning(
         f"Request warning",
         extra={
             'request_id': request_id,
@@ -385,7 +308,7 @@ def get_logger() -> logging.Logger:
     Returns:
         Logger instance
     """
-    return logger
+    return ChimeraLogger
 
 
 # --- 4. Core Utility ---
@@ -422,7 +345,7 @@ def get_model_params() -> Dict[str, Any]:
         try:
             return json.loads(env_params)
         except json.JSONDecodeError:
-            logger.warning("Failed to parse JTIU_MODEL_PARAMS, using defaults")
+            ChimeraLogger.warning("Failed to parse JTIU_MODEL_PARAMS, using defaults")
 
     # Default model parameters
     return {
@@ -636,7 +559,7 @@ def health():
     # Rate limiting check for health endpoint
     if not rate_limiter.is_allowed():
         retry_after = rate_limiter.get_retry_after()
-        logger.warning(f"Rate limit exceeded for health check. Retry after: {retry_after} seconds")
+        ChimeraLogger.warning(f"Rate limit exceeded for health check. Retry after: {retry_after} seconds")
         return JSONResponse(
             {"error": {"message": "Rate limit exceeded", "code": "rate_limit_exceeded"}},
             status_code=429,
@@ -663,13 +586,13 @@ def health():
                     upstream_latency_ms = latency_ms
                 except Exception as e:
                     upstream_status = "error"
-                    logger.warning(f"Upstream health check failed: {e}")
+                    ChimeraLogger.warning(f"Upstream health check failed: {e}")
         except Exception as e:
             upstream_status = "error"
-            logger.warning(f"Health check error: {e}")
+            ChimeraLogger.warning(f"Health check error: {e}")
     else:
         upstream_status = "not_configured"
-        logger.info("Upstream URL not configured, skipping upstream health check")
+        ChimeraLogger.info("Upstream URL not configured, skipping upstream health check")
 
     health_status["upstream"] = {
         "status": upstream_status,
@@ -980,7 +903,7 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                     # FIX 2: Aggressively strip hallucinated 'status' for every tool not in the allow-list.
                     if "status" in args and native_name not in _STATUS_ALLOWED:
                         del args["status"]
-                        logger.debug(f"Stripped hallucinated 'status' field from {native_name} call")
+                        ChimeraLogger.debug(f"Stripped hallucinated 'status' field from {native_name} call")
 
                     # FIX 3: Guard against empty-arg tool calls which cause Claude Code to loop.
                     if not args and native_name in _EMPTY_ARGS_DEFAULTS:
