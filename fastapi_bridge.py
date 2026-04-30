@@ -484,17 +484,23 @@ def robust_parse_args(raw: str) -> dict:
                 if 'notebook_path' not in args and k == 'notebook_path': args['notebook_path'] = args[k]
 
         # 2. Content & Prompt Mapping
-        for k in ['text', 'CodeContent', 'new_string', 'new_source', 'instructions', 'task', 'replacement', 'original']:
+        for k in ['text', 'CodeContent', 'TargetContent', 'ReplacementContent', 'new_string', 'new_source', 'instructions', 'task', 'replacement', 'original']:
             if k in args:
                 if 'content' not in args and k in ['text', 'CodeContent']: args['content'] = args[k]
                 if 'prompt' not in args and k in ['instructions', 'task']: args['prompt'] = args[k]
-                if 'new_string' not in args and k == 'replacement': args['new_string'] = args[k]
-                if 'old_string' not in args and k == 'original': args['old_string'] = args[k]
+                if 'new_string' not in args and k in ['replacement', 'ReplacementContent']: args['new_string'] = args[k]
+                if 'old_string' not in args and k in ['original', 'TargetContent']: args['old_string'] = args[k]
 
-        # 3. Task Mapping
-        if 'title' in args and 'subject' not in args: args['subject'] = args['title']
-        if 'name' in args and 'subject' not in args: args['subject'] = args['name']
-        if 'summary' in args and 'description' not in args: args['description'] = args['summary']
+        # 3. Task & Project Mapping
+        for k in ['title', 'name', 'subject']:
+            if k in args and 'subject' not in args: args['subject'] = args[k]
+        for k in ['summary', 'body', 'description']:
+            if k in args and 'description' not in args: args['description'] = args[k]
+        for k in ['addBlockedBy', 'blocked_by', 'depends_on', 'blockedBy']:
+            if k in args:
+                if 'blockedBy' not in args: args['blockedBy'] = args[k]
+                # If model sends empty list to 'add' parameter, it likely intends to clear
+                if args[k] == [] and 'removeBlockedBy' not in args: args['removeBlockedBy'] = []
         if 'body' in args and 'description' not in args: args['description'] = args['body']
 
         # 4. Command & Scheduling Mapping
@@ -764,12 +770,18 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             "    - If stuck on a file edit: jump directly to Step 4 (write_to_file with full content).\n"
             "    - If stuck reading the same file: trust what you already read and proceed to write the fix.\n"
             "\n"
+            "C6. INCREMENTAL WRITING — For large file generation (>800 lines):\n"
+            "    - Split the operation into multiple, successive tool calls (e.g., 500 lines each).\n"
+            "    - This prevents client timeouts and ensures the user sees visual progress.\n"
+            "C7. VERIFICATION BUFFER — Before any replace_file_content:\n"
+            "    - You MUST use view_file to read the SPECIFIC line range (±50 lines) you intend to edit.\n"
+            "    - This ensures your 'TargetContent' is an exact match and prevents accidental deletion of adjacent logic.\n"
+            "\n"
             "=== STANDARD (apply when relevant) ===\n"
-            "S1. THINK OUT LOUD: ALWAYS write a brief, 1-sentence explanation of what you are about to do BEFORE calling any tool. This provides the user with visual progress and prevents the terminal from appearing frozen.\n"
+            "S1. PROGRESS REPORTING: ALWAYS write a 1-sentence status update BEFORE calling any tool (e.g., 'Appending classes 16-30 to chimera_core.py...'). This proves you are following the incremental protocol.\n"
             "S2. NO PLACEHOLDERS: Never emit '...', 'content remains same', or partial code. Always provide complete, working blocks.\n"
             "S3. OUTPUT LANGUAGE: Always respond in English regardless of the language of the system prompt or user content.\n"
-            "S4. TOOL RESULT TRUST: Treat tool results as ground truth. Do not contradict a tool result with a prior assumption.\n"
-            "    Corollary: 'Unchanged since last read' IS a tool result. Trust it. Do not re-read to 'confirm'."
+            "S4. TOOL RESULT TRUST: Treat tool results as ground truth. Do not contradict a tool result with a prior assumption."
         )
 
         final_sys = SYSTEM_OVERRIDE
