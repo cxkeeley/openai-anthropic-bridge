@@ -846,6 +846,7 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
 
             block_idx, text_started, active_tools, tool_results = 0, False, {}, []
+            thinking_started = False  # Tracks if a thinking block is open
             for attempt in range(RETRY_MAX_ATTEMPTS):
                 try:
                     async with http_client.stream("POST", TARGET_URL, json=payload, headers={"Authorization": f"Bearer {API_TOKEN}"}) as resp:
@@ -883,8 +884,20 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                                     choice = data.get("choices", [{}])[0]
                                     delta = choice.get("delta", {})
 
+                                    # Handle Reasoning / Thinking Content (OpenAI reasoning_content → Anthropic thinking block)
+                                    reasoning_chunk = delta.get("reasoning_content") or delta.get("reasoning")
+                                    if reasoning_chunk:
+                                        if not thinking_started:
+                                            yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": block_idx, "content_block": {"type": "thinking", "thinking": ""}})}\n\n'
+                                            thinking_started = True
+                                        yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": block_idx, "delta": {"type": "thinking_delta", "thinking": reasoning_chunk}})}\n\n'
+
                                     # Handle Text Content
                                     if delta.get("content"):
+                                        if thinking_started:
+                                            # Close the thinking block before opening a text block
+                                            yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
+                                            block_idx += 1; thinking_started = False
                                         if not text_started:
                                             # Close any active tool blocks if text appears (rare but possible)
                                             yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": block_idx, "content_block": {"type": "text", "text": ""}})}\n\n'
@@ -939,6 +952,9 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                     yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": block_idx, "content_block": {"type": "text", "text": f"Connection Error: {str(e)}"}})}\n\n'
 
             # --- Finalization Phase ---
+            if thinking_started:
+                yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
+                block_idx += 1
             if text_started:
                 yield f'event: content_block_stop\ndata: {json.dumps({"type": "content_block_stop", "index": block_idx})}\n\n'
 
