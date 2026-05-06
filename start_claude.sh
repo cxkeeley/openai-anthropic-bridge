@@ -32,7 +32,7 @@ load_env_file() {
 # Load .env file if it exists
 load_env_file
 
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8000"
+export ANTHROPIC_BASE_URL="http://127.0.0.1:57123"
 export ANTHROPIC_API_KEY="sk-any-key"
 MODEL=${JTIU_MODEL:-"model"}
 

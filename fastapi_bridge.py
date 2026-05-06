@@ -579,9 +579,9 @@ def health():
                 start_time = time.time()
                 try:
                     headers = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
-                    resp = client.get(TARGET_URL, headers=headers)
+                    resp = client.options(TARGET_URL, headers=headers)
                     latency_ms = (time.time() - start_time) * 1000
-                    # A 405 (Method Not Allowed) or 403 (Forbidden) still means the upstream is reachable
+                    # A 405, 403, 200, or 204 still means the upstream is reachable
                     upstream_status = "ok" if resp.status_code < 500 or resp.status_code in [403, 405] else "error"
                     upstream_latency_ms = latency_ms
                 except Exception as e:
@@ -674,7 +674,7 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             "    Step 2: Retry replace_file_content with a narrower, more precise match string.\n"
             "    Step 3: If Step 2 fails, use multi_replace_file_content for surgical multi-block edits.\n"
             "    Step 4 (NUCLEAR): If Step 3 fails, use write_to_file with the complete corrected file.\n"
-            "    NEVER skip steps. NEVER repeat the exact same failed call.\n"
+            "    NEVER skip steps. Try the same tool up to 3 times with different approaches. If the same error persists after 3 attempts, switch to a DIFFERENT tool.\n"
             "C3. BASH FAILURE: If a Bash command fails, diagnose the error class first:\n"
             "    SyntaxError → fix code, do NOT re-run.\n"
             "    ModuleNotFoundError → install or use alternative path.\n"
@@ -688,8 +688,9 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             "    - Repeatedly reading the same unchanged file is a CRITICAL LOOP. Stop immediately.\n"
             "C5. LOOP DETECTION — When circuit breaker triggers:\n"
             "    - If you see '[CIRCUIT BREAKER — LOOP DETECTED]' in the system prompt:\n"
+            "    - You have already tried 3 times with different approaches.\n"
             "    - STOP calling the same tool with the same arguments.\n"
-            "    - Report the exact error to the user instead of retrying.\n"
+            "    - Report the exact error to the user with: what you tried, what failed, and what you recommend next.\n"
             "    - If stuck on a file edit: jump directly to Step 4 (write_to_file with full content).\n"
             "    - If stuck reading the same file: trust what you already read and proceed to write the fix.\n"
             "\n"
@@ -698,6 +699,11 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             "    - This prevents client timeouts and ensures the user sees visual progress.\n"
             "    - You MUST use view_file to read the SPECIFIC line range (±50 lines) you intend to edit.\n"
             "    - This ensures your 'TargetContent' is an exact match and prevents accidental deletion of adjacent logic.\n"
+            "C7. MANDATORY TASK TRACKING:\n"
+            "    - Before starting ANY complex task, you MUST use your native task/todo management tool to create a step-by-step checklist.\n"
+            "    - WARNING: When creating a task, DO NOT provide a 'taskId'. It is generated automatically. Supplying 'taskId' will crash the tool.\n"
+            "    - After completing each step, you MUST use your native task update tool to mark the step as completed BEFORE moving to the next step.\n"
+            "    - You must maintain this checklist throughout your execution to ensure no steps are skipped.\n"
             "C8. VERIFICATION PROTOCOL — Trust your output:\n"
             "    - Once you successfully call Write/write_to_file or replace_file_content, you are FORBIDDEN from calling list_dir or ls to 'verify' it exists.\n"
             "    - The tool output is ground truth. Proceed directly to the next logical task.\n"
@@ -706,21 +712,32 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             "    - DO NOT perform 'global sanity checks' on multiple files in a circle.\n"
             "    - Once a file has been verified (by ls, view_file, or py_compile), consider it 'Locked'.\n"
             "    - You MUST NOT check that file again unless you have made a NEW edit to it in the current turn.\n"
+            "C10. RETRY & SWITCH — When a tool fails:\n"
+            "    - Try the same tool with a different approach (up to 3 times).\n"
+            "    - If the same error persists after 3 attempts, switch to a DIFFERENT tool.\n"
+            "    - If all tools fail, report to user with exact error and what you tried.\n"
             "\n"
             "=== STANDARD (apply when relevant) ===\n"
             "S1. PROGRESS REPORTING: ALWAYS write a 1-sentence status update BEFORE calling any tool (e.g., 'Appending classes 16-30 to chimera_core.py...'). This proves you are following the incremental protocol.\n"
             "S2. NO PLACEHOLDERS: Never emit '...', 'content remains same', or partial code. Always provide complete, working blocks.\n"
             "S3. OUTPUT LANGUAGE: Always respond in English regardless of the language of the system prompt or user content.\n"
-            "S4. TOOL RESULT TRUST: Treat tool results as ground truth. Do not contradict a tool result with a prior assumption."
+            "S4. TOOL RESULT TRUST: Treat tool results as ground truth. Do not contradict a tool result with a prior assumption.\n"
+            "\n"
+            "=== EXAMPLES OF CORRECT INTERNAL MONOLOGUE ===\n"
+            "When thinking before executing tools, emulate these exact cognitive patterns:\n"
+            "1. \"I'm now focusing on specific tool usage. The goal is to replace common commands like cat, grep, and ls with their respective counterparts: view_file, grep_search, and list_dir. My priority now is to ensure I'm making appropriate tool choices before attempting to execute anything.\"\n"
+            "2. \"I'm actively avoiding generic bash commands like cat and grep and instead using view_file, grep_search, and other specialized tools to handle file operations and searches. I'm slowing down to thoroughly consider each step before invoking a tool.\"\n"
+            "3. \"Prioritizing Tool Specificity: I've internalized the instruction to avoid cat for file creation/appending. I'm actively favoring grep_search over in-line grep usage. It’s ingrained: no ls unless utterly unavoidable!\"\n"
+            "4. \"Listing Relevant Tools: I've shifted my focus to critically evaluating tool relevance before execution, as explicitly instructed. I've broken down the task, listed relevant tools, and decided on write_to_file to create the necessary file.\""
         )
 
         # 1. Start with the Base System Override (if any)
         final_sys = SYSTEM_OVERRIDE or ""
-        
+
         # 2. Add the Bridge Expert Persona (The "How to think" layer)
         if EXPERT_PERSONA:
             final_sys = f"{final_sys}\n\n{EXPERT_PERSONA}" if final_sys else EXPERT_PERSONA
-            
+
         # 3. Add the User's settings.json / Project Rules (The "What to obey" layer)
         # We put this LAST so it has the highest priority and recency influence.
         if sys_p:
@@ -735,18 +752,18 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
 
         # Scan messages backwards to find loop patterns
         assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
-        
+
         for msg in reversed(assistant_messages):
             if "tool_calls" in msg:
                 current_calls = [tc.get("function", {}).get("name") for tc in msg["tool_calls"]]
-                
+
                 for tc in msg["tool_calls"]:
                     name = tc.get("function", {}).get("name")
-                    
+
                     # Track Read/List operations (including Bash)
                     is_read = name in ["Read", "view_file", "list_dir"]
                     is_bash_read = False
-                    
+
                     if name == "Bash":
                         bash_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
                         cmd = bash_args.get("command", "").lower()
@@ -756,19 +773,19 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                     if is_read or is_bash_read:
                         args = json.loads(tc.get("function", {}).get("arguments", "{}"))
                         file_path = args.get("file_path") or args.get("AbsolutePath") or args.get("path") or args.get("DirectoryPath") or args.get("command", "")
-                        
+
                         if file_path:
                             # Immediate Repeat Detection
                             if file_path == last_read_file and actions_since_read == 0:
                                 repeats += 1
-                            
+
                             # Cyclical Loop Detection (Last 10 paths)
                             if file_path in read_history:
                                 repeats += 0.5 # Fractional weight for cyclical hits
-                            
+
                             read_history.append(file_path)
                             if len(read_history) > 10: read_history.pop(0)
-                            
+
                             last_read_file = file_path
                             actions_since_read = 0
                     elif name not in ["Read", "view_file", "list_dir", "ls", "Bash"]:
@@ -777,8 +794,12 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                 # Check if the overall tool call pattern is repeating
                 if last_calls == current_calls and current_calls:
                     repeats += 1
+                elif last_calls is not None:
+                    # Chain is broken! Stop scanning backwards so old, resolved loops don't haunt future requests.
+                    break
+
                 last_calls = current_calls
-                
+
                 if repeats >= 2.5: break # Threshold reached
 
         if repeats >= 2:
@@ -795,22 +816,10 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                 f"\n\n[CIRCUIT BREAKER — LOOP DETECTED]\n"
                 f"You have called [{repeated_hint}] {repeats} times without progress. This is a loop.\n"
                 "MANDATORY ACTIONS:\n"
-                "1. Do NOT call the same tool again with the same arguments.\n"
+                "1. You MUST switch to a DIFFERENT tool. Do NOT call the same tool again.\n"
                 "2. If stuck on a file edit: jump directly to ESCALATION LADDER Step 4 (write_to_file with full content).\n"
                 "3. If stuck on a Bash error: stop executing and report the exact error to the user instead of retrying.\n"
                 "4. If stuck reading the same file: trust what you already read and proceed to write the fix."
-            )
-            # HARD ERROR: Return a 503 Service Unavailable response
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "error": {
-                        "message": "Circuit Breaker Triggered: Loop Detected",
-                        "code": "circuit_breaker_loop",
-                        "repeats": repeats,
-                        "repeated_tools": repeated_hint
-                    }
-                }
             )
 
         if final_sys: messages.insert(0, {"role": "system", "content": final_sys})
@@ -849,7 +858,7 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                                 import asyncio
                                 await asyncio.sleep(delay)
                                 continue
-                            
+
                             # Limit reading to prevent OOM on massive error pages
                             err_chunk = await resp.aread()
                             err_body = err_chunk[:4096] # 4KB max
@@ -987,4 +996,4 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=57123)
