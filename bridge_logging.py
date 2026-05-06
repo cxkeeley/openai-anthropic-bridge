@@ -6,7 +6,7 @@ import sys
 
 # --- 1. Logging ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-LOG_PATH = os.path.join(BASE_DIR, "bridge.log")
+LOG_PATH = os.path.join(BASE_DIR, "logs", "bridge.log")
 
 # Auto-cleanup if Docker/System created a directory named 'bridge.log'
 if os.path.isdir(LOG_PATH):

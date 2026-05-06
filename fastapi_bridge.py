@@ -696,9 +696,16 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             "C6. INCREMENTAL WRITING — For large file generation (>800 lines):\n"
             "    - Split the operation into multiple, successive tool calls (e.g., 500 lines each).\n"
             "    - This prevents client timeouts and ensures the user sees visual progress.\n"
-            "C7. VERIFICATION BUFFER — Before any replace_file_content:\n"
             "    - You MUST use view_file to read the SPECIFIC line range (±50 lines) you intend to edit.\n"
             "    - This ensures your 'TargetContent' is an exact match and prevents accidental deletion of adjacent logic.\n"
+            "C8. VERIFICATION PROTOCOL — Trust your output:\n"
+            "    - Once you successfully call Write/write_to_file or replace_file_content, you are FORBIDDEN from calling list_dir or ls to 'verify' it exists.\n"
+            "    - The tool output is ground truth. Proceed directly to the next logical task.\n"
+            "    - Only use view_file AFTER a write if you specifically need to read the new content to perform a follow-up calculation.\n"
+            "C9. NO CIRCULAR CHECKS:\n"
+            "    - DO NOT perform 'global sanity checks' on multiple files in a circle.\n"
+            "    - Once a file has been verified (by ls, view_file, or py_compile), consider it 'Locked'.\n"
+            "    - You MUST NOT check that file again unless you have made a NEW edit to it in the current turn.\n"
             "\n"
             "=== STANDARD (apply when relevant) ===\n"
             "S1. PROGRESS REPORTING: ALWAYS write a 1-sentence status update BEFORE calling any tool (e.g., 'Appending classes 16-30 to chimera_core.py...'). This proves you are following the incremental protocol.\n"
@@ -707,41 +714,72 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             "S4. TOOL RESULT TRUST: Treat tool results as ground truth. Do not contradict a tool result with a prior assumption."
         )
 
-        final_sys = SYSTEM_OVERRIDE
-        if sys_p: final_sys = f"{SYSTEM_OVERRIDE}\n\n{sys_p}" if final_sys else sys_p
-
-        # Inject the high-precision persona
-        final_sys = f"{final_sys}{EXPERT_PERSONA}" if final_sys else EXPERT_PERSONA.strip()
+        # 1. Start with the Base System Override (if any)
+        final_sys = SYSTEM_OVERRIDE or ""
+        
+        # 2. Add the Bridge Expert Persona (The "How to think" layer)
+        if EXPERT_PERSONA:
+            final_sys = f"{final_sys}\n\n{EXPERT_PERSONA}" if final_sys else EXPERT_PERSONA
+            
+        # 3. Add the User's settings.json / Project Rules (The "What to obey" layer)
+        # We put this LAST so it has the highest priority and recency influence.
+        if sys_p:
+            final_sys = f"{final_sys}\n\n[USER RULES & PROJECT PROTOCOLS]\n{sys_p}" if final_sys else sys_p
 
         # [CIRCUIT BREAKER] Detect repeated tool calls in message history to break agentic loops
         repeats = 0
         last_calls = None
+        read_history = []  # Track last 10 read/list paths to catch cyclical loops
         last_read_file = None
         actions_since_read = 0
 
-        for msg in reversed(messages):
-            if msg["role"] == "assistant" and "tool_calls" in msg:
-                current_calls = []
+        # Scan messages backwards to find loop patterns
+        assistant_messages = [msg for msg in messages if msg["role"] == "assistant"]
+        
+        for msg in reversed(assistant_messages):
+            if "tool_calls" in msg:
+                current_calls = [tc.get("function", {}).get("name") for tc in msg["tool_calls"]]
+                
                 for tc in msg["tool_calls"]:
                     name = tc.get("function", {}).get("name")
-                    current_calls.append(name)
+                    
+                    # Track Read/List operations (including Bash)
+                    is_read = name in ["Read", "view_file", "list_dir"]
+                    is_bash_read = False
+                    
+                    if name == "Bash":
+                        bash_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                        cmd = bash_args.get("command", "").lower()
+                        if any(x in cmd for x in ["cat ", "grep ", "head ", "tail ", "ls ", "find "]):
+                            is_bash_read = True
 
-                    # Track Read operations
-                    if name in ["Read", "view_file"]:
+                    if is_read or is_bash_read:
                         args = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                        file_path = args.get("file_path") or args.get("AbsolutePath") or args.get("path")
-                        if file_path == last_read_file and actions_since_read == 0:
-                            repeats += 1
-                        last_read_file = file_path
-                        actions_since_read = 0
-                    elif name not in ["Read", "view_file", "list_dir", "ls"]:
+                        file_path = args.get("file_path") or args.get("AbsolutePath") or args.get("path") or args.get("DirectoryPath") or args.get("command", "")
+                        
+                        if file_path:
+                            # Immediate Repeat Detection
+                            if file_path == last_read_file and actions_since_read == 0:
+                                repeats += 1
+                            
+                            # Cyclical Loop Detection (Last 10 paths)
+                            if file_path in read_history:
+                                repeats += 0.5 # Fractional weight for cyclical hits
+                            
+                            read_history.append(file_path)
+                            if len(read_history) > 10: read_history.pop(0)
+                            
+                            last_read_file = file_path
+                            actions_since_read = 0
+                    elif name not in ["Read", "view_file", "list_dir", "ls", "Bash"]:
                         actions_since_read += 1
 
+                # Check if the overall tool call pattern is repeating
                 if last_calls == current_calls and current_calls:
                     repeats += 1
-                else:
-                    if last_calls is not None: break
-                    last_calls = current_calls
+                last_calls = current_calls
+                
+                if repeats >= 2.5: break # Threshold reached
 
         if repeats >= 2:
             # Build a diagnostic hint from the actual repeated call(s)
@@ -761,6 +799,18 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                 "2. If stuck on a file edit: jump directly to ESCALATION LADDER Step 4 (write_to_file with full content).\n"
                 "3. If stuck on a Bash error: stop executing and report the exact error to the user instead of retrying.\n"
                 "4. If stuck reading the same file: trust what you already read and proceed to write the fix."
+            )
+            # HARD ERROR: Return a 503 Service Unavailable response
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": {
+                        "message": "Circuit Breaker Triggered: Loop Detected",
+                        "code": "circuit_breaker_loop",
+                        "repeats": repeats,
+                        "repeated_tools": repeated_hint
+                    }
+                }
             )
 
         if final_sys: messages.insert(0, {"role": "system", "content": final_sys})
