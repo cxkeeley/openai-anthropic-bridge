@@ -578,11 +578,16 @@ def health():
             with httpx.Client(verify=SSL_VERIFY, timeout=httpx.Timeout(5.0)) as client:
                 start_time = time.time()
                 try:
-                    headers = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
-                    resp = client.options(TARGET_URL, headers=headers)
+                    headers = {
+                        "Authorization": f"Bearer {API_TOKEN}" if API_TOKEN else "",
+                        "Content-Type": "application/json",
+                    }
+                    # The upstream only accepts POST — send a minimal probe body.
+                    # A 400/401/422 still means the upstream is alive; only 5xx = down.
+                    probe_body = {"model": MODEL_NAME, "messages": [], "max_tokens": 1}
+                    resp = client.post(TARGET_URL, json=probe_body, headers=headers)
                     latency_ms = (time.time() - start_time) * 1000
-                    # A 405, 403, 200, or 204 still means the upstream is reachable
-                    upstream_status = "ok" if resp.status_code < 500 or resp.status_code in [403, 405] else "error"
+                    upstream_status = "ok" if resp.status_code < 500 else "error"
                     upstream_latency_ms = latency_ms
                 except Exception as e:
                     upstream_status = "error"
