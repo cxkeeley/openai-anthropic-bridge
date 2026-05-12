@@ -395,8 +395,8 @@ def validate_tool_call_id(tool_call_id: str | None) -> bool:
     """
     if not tool_call_id:
         return False
-    # Claude/Anthropic tool call IDs typically start with 'call_' followed by alphanumeric chars
-    pattern = r'^call_[a-zA-Z0-9_.-]+$'
+    # Anthropic tool call IDs use the 'toolu_' prefix followed by alphanumeric chars
+    pattern = r'^toolu_[a-zA-Z0-9]+$'
     return bool(re.match(pattern, tool_call_id))
 
 
@@ -404,7 +404,7 @@ def generate_tool_call_id(idx: int) -> str:
     """
     Generate a valid tool call ID that matches expected format
     """
-    return f"call_{uuid.uuid4().hex}_{idx}"
+    return f"toolu_{uuid.uuid4().hex[:24]}"
 
 
 def get_model_params() -> Dict[str, Any]:
