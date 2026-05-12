@@ -1,4 +1,4 @@
-# Universal AI Bridge (OpenAI to Anthropic)
+# Chimera Bridge (OpenAI to Anthropic)
 
 ## 🏗️ Architecture Summary
 

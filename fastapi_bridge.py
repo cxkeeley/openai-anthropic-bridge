@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-OpenAI/Anthropic Bridge - Main Application
+Chimera Bridge - Main Application
 
 This is the main application file for the OpenAI/Anthropic Bridge.
 It imports all components from the core package and sets up the FastAPI application.

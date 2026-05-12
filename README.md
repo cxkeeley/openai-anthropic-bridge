@@ -1,6 +1,6 @@
-# Universal AI Bridge (OpenAI to Anthropic)
+# Chimera Bridge (OpenAI to Anthropic)
 
-This repository contains a production-grade, modular bridge application that allows you to use any OpenAI-compatible AI model (like China Mobile JiuTian, NVIDIA NIM, or Groq) with the Anthropic API format. The bridge is compiled with Cython for high performance and hardened with proactive circuit breakers to ensure stable agentic communication.
+This repository contains **Chimera Bridge**, a production-grade, modular application that allows you to use any OpenAI-compatible AI model (like China Mobile JiuTian, NVIDIA NIM, or Groq) with the Anthropic API format. The bridge is compiled with Cython for high performance and hardened with proactive circuit breakers to ensure stable agentic communication.
 
 ## Key Features
 

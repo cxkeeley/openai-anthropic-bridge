@@ -1,7 +1,7 @@
 services:
-  claude-bridge:
+  chimera-bridge:
     build: .
-    container_name: claude-bridge-proxy
+    container_name: chimera-bridge
     ports:
       - '57123:57123'
     env_file:
