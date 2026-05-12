@@ -217,22 +217,13 @@ def get_model_params() -> Dict[str, Any]:
     Get model parameters from environment or use defaults.
     Returns a dict with model_params structure for JiuTian API.
     """
-    # Try to load from environment variable
-    env_params = os.environ.get("BRIDGE_MODEL_PARAMS", "")
-    if env_params:
-        try:
-            return json.loads(env_params)
-        except json.JSONDecodeError:
-            ChimeraLogger.warning("Failed to parse BRIDGE_MODEL_PARAMS, using defaults")
-
-    # Default model parameters
     return {
         "text": {
-            "temperature": 0.0,
-            "max_tokens": 131072,
-            "presence_penalty": 0.0,
-            "frequency_penalty": 0.0,
-            "top_p": 0.95
+            "temperature": float(os.environ.get("BRIDGE_TEMPERATURE", "0.0")),
+            "max_tokens": int(os.environ.get("BRIDGE_MAX_TOKENS", "131072")),
+            "presence_penalty": float(os.environ.get("BRIDGE_PRESENCE_PENALTY", "0.0")),
+            "frequency_penalty": float(os.environ.get("BRIDGE_FREQUENCY_PENALTY", "0.0")),
+            "top_p": float(os.environ.get("BRIDGE_TOP_P", "0.95"))
         }
     }
 
