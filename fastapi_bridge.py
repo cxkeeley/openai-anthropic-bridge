@@ -774,18 +774,15 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                 for tc in msg["tool_calls"]:
                     name = tc.get("function", {}).get("name")
 
-                    # Track Read/List operations (including Bash)
+                    # Track Read/List operations AND all Bash commands for loop detection.
+                    # Any Bash command (curl, grep, cat, find, …) repeated with the same
+                    # arguments without intervening progress counts as a loop.
                     is_read = name in ["Read", "view_file", "list_dir"]
-                    is_bash_read = False
+                    is_trackable_bash = name == "Bash"
 
-                    if name == "Bash":
-                        bash_args = json.loads(tc.get("function", {}).get("arguments", "{}"))
-                        cmd = bash_args.get("command", "").lower()
-                        if any(x in cmd for x in ["cat ", "grep ", "head ", "tail ", "ls ", "find "]):
-                            is_bash_read = True
-
-                    if is_read or is_bash_read:
+                    if is_read or is_trackable_bash:
                         args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                        # For Bash: track the full command string as the "key"
                         file_path = args.get("file_path") or args.get("AbsolutePath") or args.get("path") or args.get("DirectoryPath") or args.get("command", "")
 
                         if file_path:
@@ -793,7 +790,7 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                             if file_path == last_read_file and actions_since_read == 0:
                                 repeats += 1
 
-                            # Cyclical Loop Detection (Last 10 paths)
+                            # Cyclical Loop Detection (Last 10 paths/commands)
                             if file_path in read_history:
                                 repeats += 0.5 # Fractional weight for cyclical hits
 
@@ -802,7 +799,7 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
 
                             last_read_file = file_path
                             actions_since_read = 0
-                    elif name not in ["Read", "view_file", "list_dir", "ls", "Bash"]:
+                    elif name not in ["Read", "view_file", "list_dir", "ls"]:
                         actions_since_read += 1
 
                 # Check if the overall tool call pattern is repeating
