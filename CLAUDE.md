@@ -9,6 +9,7 @@ The bridge is a production-grade proxy that translates between the Anthropic and
 - **`core/transformers.py`**: Logic for robust JSON parsing, message merging, and tool ID generation.
 - **`core/security.py`**: Implementation of `NetworkCircuitBreaker` and `RateLimiter`.
 - **`core/logger.py`**: Structured JSON logging infrastructure (`ChimeraLogger`).
+- **`core/metrics.py`**: Centralized Prometheus metrics registry and exporter.
 - **`core/__init__.py`**: Package initialization with exports for all core modules.
 
 ## 🛠️ Deployment & Build
@@ -29,13 +30,20 @@ The project uses Cython to compile Python source code into machine-code binaries
 - **Minimalism**: Write the simplest code possible. Keep the codebase modular.
 - **DRY**: Shared logic belongs in `core/`. Providers must not import from each other.
 - **Encapsulation**: Use accessors (e.g., `set_current_task()`) for internal state.
-- **No Type Ignores**: Fix the underlying type issue; never use `# type: ignore`.
+- **No Type Ignores**: Fix the underlying type issue; never use `# type: ignore**.
 - **Performance**: Use list accumulation for strings, cache env vars at init, prefer iterative over recursive.
 - **Zero-Defect Engineering**: Root-cause analysis for bugs; test-driven development for new features.
+
+## 🚫 Critical Tool Usage Rules
+
+- **Atomic Writes**: When writing files, write the entire file in one single `write_to_file` call. Do not use incremental edits for the first version of a file. This prevents context drift and ensures file integrity.
+- **Read Loop Prevention**: If a `Read` tool returns "Unchanged since last read", this means the file content is already in context. Do not re-read the same file repeatedly - use what you already have or read a different file.
+- **Loop Detection**: If you see "[CIRCUIT BREAKER — LOOP DETECTED]", you have already tried 3 times with different approaches. STOP calling the same tool. Report the exact error and recommend next steps.
 
 ## 🔄 Recent Changes
 
 - **2026-05-12**: Refactored monolithic `fastapi_bridge.py` into modular `core/` package structure
+- **2026-05-12**: Implemented centralized Prometheus Metrics Engine and `/metrics` endpoint
 - **2026-05-12**: Implemented `/v1/status` endpoint for monitoring
 - **2026-05-12**: Updated build system to compile entire `core/` package
 
