@@ -21,4 +21,4 @@ EXPOSE 57123
 
 # Start server using Gunicorn
 # Note: We use the same module name 'fastapi_bridge' which now points to the compiled .so file
-CMD ["gunicorn", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:57123", "--workers", "1", "--threads", "8", "--timeout", "0", "fastapi_bridge:app"]
+CMD ["sh", "-c", "gunicorn -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:57123 --workers $((2 * $(nproc) + 1)) --threads 8 --timeout 0 fastapi_bridge:app"]

@@ -2,7 +2,7 @@
 
 # Default values
 DEFAULT_HOST="127.0.0.1"
-DEFAULT_PORT="8000"
+DEFAULT_PORT="57123"
 DEFAULT_TARGET_URL="http://localhost:11434/v1/chat/completions"
 DEFAULT_TOKEN="sk-your-token-here"
 

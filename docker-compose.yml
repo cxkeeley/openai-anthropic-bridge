@@ -10,6 +10,9 @@ services:
     dns:
       - 8.8.8.8
       - 1.1.1.1
+    environment:
+      - GODEBUG=netdns=go
+      - PORT=57123
     volumes:
       - ./logs:/app/logs
     healthcheck:
