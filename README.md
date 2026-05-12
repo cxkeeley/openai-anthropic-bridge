@@ -1,6 +1,6 @@
-# Claude Bridge for JiuTian (九天) Model
+# Universal AI Bridge (OpenAI to Anthropic)
 
-This repository contains a production-grade, modular bridge application that allows you to use the China Mobile JiuTian (九天) AI model with both the Anthropic and OpenAI API formats. The bridge is compiled with Cython for high performance and hardened with proactive circuit breakers to ensure stable agentic communication.
+This repository contains a production-grade, modular bridge application that allows you to use any OpenAI-compatible AI model (like China Mobile JiuTian, NVIDIA NIM, or Groq) with the Anthropic API format. The bridge is compiled with Cython for high performance and hardened with proactive circuit breakers to ensure stable agentic communication.
 
 ## Key Features
 
@@ -27,7 +27,7 @@ The recommended way to deploy is using the automated build script:
 1. Clone the repository and configure `.env`:
    ```bash
    cp .env.example .env
-   # Edit .env with your JTIU_TOKEN and TARGET_URL
+   # Edit .env with your BRIDGE_TOKEN and TARGET_URL
    ```
 
 2. Run the automated deployment script:
@@ -41,10 +41,10 @@ The recommended way to deploy is using the automated build script:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PORT` | Port to listen on | `57123` |
-| `JTIU_TARGET_URL` | Target JiuTian service URL | (Required) |
-| `JTIU_TOKEN` | Authentication JWT token | (Required) |
-| `JTIU_MODEL` | Target model name | `jt_indonesia` |
-| `JTIU_UPSTREAM_TIMEOUT`| Timeout for upstream requests | `600.0` |
+| `BRIDGE_TARGET_URL` | Target JiuTian service URL | (Required) |
+| `BRIDGE_TOKEN` | Authentication JWT token | (Required) |
+| `BRIDGE_MODEL` | Target model name | `jt_indonesia` |
+| `BRIDGE_UPSTREAM_TIMEOUT`| Timeout for upstream requests | `600.0` |
 
 ## Monitoring & Health
 

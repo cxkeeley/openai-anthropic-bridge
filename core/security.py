@@ -73,7 +73,7 @@ class RateLimiter:
         Returns True if the request is allowed, False otherwise.
         """
         # Check environment variable at runtime
-        rate_limit_enabled = os.environ.get("JTIU_RATE_LIMIT_ENABLED", "false").lower() == "true"
+        rate_limit_enabled = os.environ.get("BRIDGE_RATE_LIMIT_ENABLED", "false").lower() == "true"
         if not rate_limit_enabled:
             return True
 

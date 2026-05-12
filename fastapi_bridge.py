@@ -48,22 +48,22 @@ shutdown_event = asyncio.Event()
 active_connections = 0
 
 # --- 2. Configuration ---
-TARGET_URL = os.environ.get("JTIU_TARGET_URL", "")
-API_TOKEN = os.environ.get("JTIU_TOKEN", "")
-MODEL_NAME = os.environ.get("JTIU_MODEL", "")
-SYSTEM_OVERRIDE = os.environ.get("JTIU_SYSTEM_OVERRIDE", "")
-SSL_VERIFY = os.environ.get("JTIU_SSL_VERIFY", "true").lower() == "true"
+TARGET_URL = os.environ.get("BRIDGE_TARGET_URL", "")
+API_TOKEN = os.environ.get("BRIDGE_TOKEN", "")
+MODEL_NAME = os.environ.get("BRIDGE_MODEL", "")
+SYSTEM_OVERRIDE = os.environ.get("BRIDGE_SYSTEM_OVERRIDE", "")
+SSL_VERIFY = os.environ.get("BRIDGE_SSL_VERIFY", "true").lower() == "true"
 
 # Rate Limiting Configuration
-RATE_LIMIT_ENABLED = os.environ.get("JTIU_RATE_LIMIT_ENABLED", "false").lower() == "true"
-RATE_LIMIT_REQUESTS = int(os.environ.get("JTIU_RATE_LIMIT_REQUESTS", "10"))
-RATE_LIMIT_WINDOW = float(os.environ.get("JTIU_RATE_LIMIT_WINDOW", "60.0"))
+RATE_LIMIT_ENABLED = os.environ.get("BRIDGE_RATE_LIMIT_ENABLED", "false").lower() == "true"
+RATE_LIMIT_REQUESTS = int(os.environ.get("BRIDGE_RATE_LIMIT_REQUESTS", "10"))
+RATE_LIMIT_WINDOW = float(os.environ.get("BRIDGE_RATE_LIMIT_WINDOW", "60.0"))
 
 # Upstream Configuration
-UPSTREAM_TIMEOUT = float(os.environ.get("JTIU_UPSTREAM_TIMEOUT", "600.0"))
-RETRY_MAX_ATTEMPTS = int(os.environ.get("JTIU_RETRY_MAX_ATTEMPTS", "3"))
-RETRY_BASE_DELAY = float(os.environ.get("JTIU_RETRY_BASE_DELAY", "1.0"))
-MAX_PAYLOAD_SIZE = int(os.environ.get("JTIU_MAX_PAYLOAD_SIZE", "10485760"))  # 10MB default
+UPSTREAM_TIMEOUT = float(os.environ.get("BRIDGE_UPSTREAM_TIMEOUT", "600.0"))
+RETRY_MAX_ATTEMPTS = int(os.environ.get("BRIDGE_RETRY_MAX_ATTEMPTS", "3"))
+RETRY_BASE_DELAY = float(os.environ.get("BRIDGE_RETRY_BASE_DELAY", "1.0"))
+MAX_PAYLOAD_SIZE = int(os.environ.get("BRIDGE_MAX_PAYLOAD_SIZE", "10485760"))  # 10MB default
 
 # Global circuit breaker and rate limiter instances
 circuit_breaker = NetworkCircuitBreaker()
@@ -218,12 +218,12 @@ def get_model_params() -> Dict[str, Any]:
     Returns a dict with model_params structure for JiuTian API.
     """
     # Try to load from environment variable
-    env_params = os.environ.get("JTIU_MODEL_PARAMS", "")
+    env_params = os.environ.get("BRIDGE_MODEL_PARAMS", "")
     if env_params:
         try:
             return json.loads(env_params)
         except json.JSONDecodeError:
-            ChimeraLogger.warning("Failed to parse JTIU_MODEL_PARAMS, using defaults")
+            ChimeraLogger.warning("Failed to parse BRIDGE_MODEL_PARAMS, using defaults")
 
     # Default model parameters
     return {

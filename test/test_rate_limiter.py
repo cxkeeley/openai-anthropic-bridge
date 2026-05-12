@@ -4,7 +4,7 @@ import pytest
 import os
 
 # Set rate limiting enabled for tests
-os.environ["JTIU_RATE_LIMIT_ENABLED"] = "true"
+os.environ["BRIDGE_RATE_LIMIT_ENABLED"] = "true"
 
 from fastapi_bridge import RateLimiter
 
@@ -53,13 +53,13 @@ class TestRateLimiter:
     def test_rate_limit_disabled(self):
         """Test that rate limiting can be disabled."""
         import os
-        os.environ["JTIU_RATE_LIMIT_ENABLED"] = "false"
+        os.environ["BRIDGE_RATE_LIMIT_ENABLED"] = "false"
         try:
             limiter = RateLimiter(max_requests=5, window_seconds=60.0)
             for _ in range(10):
                 assert limiter.is_allowed() is True
         finally:
-            os.environ["JTIU_RATE_LIMIT_ENABLED"] = "true"
+            os.environ["BRIDGE_RATE_LIMIT_ENABLED"] = "true"
 
     def test_window_expiration(self):
         """Test that old requests expire from the window."""

@@ -2,7 +2,7 @@
 import pytest
 import os
 
-os.environ["JTIU_RATE_LIMIT_ENABLED"] = "false"
+os.environ["BRIDGE_RATE_LIMIT_ENABLED"] = "false"
 
 from fastapi.testclient import TestClient
 from fastapi_bridge import app, rate_limiter

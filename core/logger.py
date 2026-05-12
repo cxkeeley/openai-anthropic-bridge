@@ -75,7 +75,7 @@ class ChimeraLogger:
             os.makedirs(LOG_DIR, exist_ok=True)
 
         # Configure logging
-        LOG_LEVEL_STR = os.environ.get("JTIU_LOG_LEVEL", "INFO").upper()
+        LOG_LEVEL_STR = os.environ.get("BRIDGE_LOG_LEVEL", "INFO").upper()
         LOG_LEVEL = getattr(logging, LOG_LEVEL_STR, logging.INFO)
 
         log_formatter = StructuredLogFormatter()

@@ -1,4 +1,4 @@
-# Claude Bridge for JiuTian (九天) Model
+# Universal AI Bridge (OpenAI to Anthropic)
 
 ## 🏗️ Architecture Summary
 

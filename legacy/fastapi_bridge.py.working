@@ -49,11 +49,11 @@ logger = logging.getLogger("Bridge")
 logger.info("BRIDGE STARTED - INFO LEVEL ENABLED")
 
 # --- 3. Configuration ---
-TARGET_URL = os.environ.get("JTIU_TARGET_URL", "")
-API_TOKEN = os.environ.get("JTIU_TOKEN", "")
-MODEL_NAME = os.environ.get("JTIU_MODEL", "jt_indonesia")
-SSL_VERIFY = os.environ.get("JTIU_SSL_VERIFY", "true").lower() == "true"
-JTIU_REPAIR_SYNTAX = os.environ.get("JTIU_REPAIR_SYNTAX", "true").lower() == "true"
+TARGET_URL = os.environ.get("BRIDGE_TARGET_URL", "")
+API_TOKEN = os.environ.get("BRIDGE_TOKEN", "")
+MODEL_NAME = os.environ.get("BRIDGE_MODEL", "jt_indonesia")
+SSL_VERIFY = os.environ.get("BRIDGE_SSL_VERIFY", "true").lower() == "true"
+BRIDGE_REPAIR_SYNTAX = os.environ.get("BRIDGE_REPAIR_SYNTAX", "true").lower() == "true"
 
 # --- 4. Core Logic & Utility Engines ---
 def sanitize_path(path: Any) -> str:
@@ -362,7 +362,7 @@ def robust_parse_args(raw: str) -> dict:
         if k in args: args[k] = sanitize_path(args[k])
 
     # Apply syntax repair to code-related fields if enabled
-    if JTIU_REPAIR_SYNTAX:
+    if BRIDGE_REPAIR_SYNTAX:
         for k in ['content', 'text', 'new_string', 'ReplacementContent', 'CodeContent']:
             if k in args and isinstance(args[k], str):
                 # Treat new_string and ReplacementContent as fragments to avoid over-balancing
