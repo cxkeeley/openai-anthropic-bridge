@@ -1,10 +1,19 @@
+#!/usr/bin/env python3
+"""
+OpenAI/Anthropic Bridge - Main Application
+
+This is the main application file for the OpenAI/Anthropic Bridge.
+It imports all components from the core package and sets up the FastAPI application.
+
+The bridge translates between the Anthropic and OpenAI API formats,
+enabling seamless integration with various AI development tools and platforms.
+"""
 import os
 import json
 import logging
 import logging.handlers
 import httpx
 import time
-import sys
 import uuid
 import re
 from fastapi import FastAPI, Request
@@ -13,10 +22,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
-from bridge_logging import ChimeraLogger
 from pydantic import BaseModel, ConfigDict
 from contextlib import asynccontextmanager
 import asyncio
+
+# Import from core package
+from core import EXPERT_PERSONA
+from core import NetworkCircuitBreaker, RateLimiter
+from core import robust_parse_args, merge_messages, SSEParser, validate_tool_call_id, generate_tool_call_id
+from bridge_logging import ChimeraLogger
 
 load_dotenv()
 
@@ -34,11 +48,6 @@ http_client: Optional[httpx.AsyncClient] = None
 shutdown_event = asyncio.Event()
 active_connections = 0
 
-
-# --- 1. Logging ---
-# Logging is now handled by bridge_logging.py
-# This file imports ChimeraLogger from bridge_logging
-
 # --- 2. Configuration ---
 TARGET_URL = os.environ.get("JTIU_TARGET_URL", "")
 API_TOKEN = os.environ.get("JTIU_TOKEN", "")
@@ -51,177 +60,14 @@ RATE_LIMIT_ENABLED = os.environ.get("JTIU_RATE_LIMIT_ENABLED", "false").lower() 
 RATE_LIMIT_REQUESTS = int(os.environ.get("JTIU_RATE_LIMIT_REQUESTS", "10"))
 RATE_LIMIT_WINDOW = float(os.environ.get("JTIU_RATE_LIMIT_WINDOW", "60.0"))
 
-# Model Parameters Configuration
-MODEL_PARAMS = os.environ.get("JTIU_MODEL_PARAMS", "")
-
 # Upstream Configuration
 UPSTREAM_TIMEOUT = float(os.environ.get("JTIU_UPSTREAM_TIMEOUT", "600.0"))
 RETRY_MAX_ATTEMPTS = int(os.environ.get("JTIU_RETRY_MAX_ATTEMPTS", "3"))
 RETRY_BASE_DELAY = float(os.environ.get("JTIU_RETRY_BASE_DELAY", "1.0"))
-MAX_PAYLOAD_SIZE = int(os.environ.get("JTIU_MAX_PAYLOAD_SIZE", "10485760")) # 10MB default
+MAX_PAYLOAD_SIZE = int(os.environ.get("JTIU_MAX_PAYLOAD_SIZE", "10485760"))  # 10MB default
 
-# --- Expert Persona (module-level constant — allocated once at startup) ---
-EXPERT_PERSONA = (
-    "\n\n[ANTIGRAVITY EXPERT MODE — ACTIVE]\n"
-    "You are a high-precision Systems Architect operating inside a bridged agentic environment.\n"
-    "Obey these rules in strict priority order:\n"
-    "\n"
-    "=== CRITICAL (apply before every tool call) ===\n"
-    "C1. TOOL MAP — Always prefer the specialized tool over a shell equivalent:\n"
-    "    cat/head/tail  → view_file\n"
-    "    grep/rg        → grep_search\n"
-    "    ls/find        → list_dir\n"
-    "    sed/awk/patch  → replace_file_content or multi_replace_file_content\n"
-    "    echo > file    → write_to_file\n"
-    "    Use Bash ONLY when no specialized tool covers the operation.\n"
-    "C2. ESCALATION LADDER — On any edit/write failure, follow this exact sequence:\n"
-    "    Step 1: Use view_file on the SPECIFIC failing lines (not the whole file) to confirm exact content.\n"
-    "    Step 2: Retry replace_file_content with a narrower, more precise match string.\n"
-    "    Step 3: If Step 2 fails, use multi_replace_file_content for surgical multi-block edits.\n"
-    "    Step 4 (NUCLEAR): If Step 3 fails, use write_to_file with the complete corrected file.\n"
-    "    NEVER skip steps. Try the same tool up to 3 times with different approaches. If the same error persists after 3 attempts, switch to a DIFFERENT tool.\n"
-    "C3. BASH FAILURE: If a Bash command fails, diagnose the error class first:\n"
-    "    SyntaxError → fix code, do NOT re-run.\n"
-    "    ModuleNotFoundError → install or use alternative path.\n"
-    "    PermissionError → check path and permissions with list_dir first.\n"
-    "C4. CACHE HIT — STOP RE-READING:\n"
-    "    If a Read/view_file result says 'Unchanged since last read', this means:\n"
-    "    - The file content IS ALREADY in your context window from a previous read.\n"
-    "    - Calling Read again on the same path/lines will ALWAYS return the same result.\n"
-    "    - You MUST NOT call Read on that file again. Scroll up in your context and use what you already have.\n"
-    "    - If you cannot find the content you need in context, read a DIFFERENT line range or a DIFFERENT file.\n"
-    "    - Repeatedly reading the same unchanged file is a CRITICAL LOOP. Stop immediately.\n"
-    "C5. LOOP DETECTION — When circuit breaker triggers:\n"
-    "    - If you see '[CIRCUIT BREAKER — LOOP DETECTED]' in the system prompt:\n"
-    "    - You have already tried 3 times with different approaches.\n"
-    "    - STOP calling the same tool with the same arguments.\n"
-    "    - Report the exact error to the user with: what you tried, what failed, and what you recommend next.\n"
-    "    - If stuck on a file edit: jump directly to Step 4 (write_to_file with full content).\n"
-    "    - If stuck reading the same file: trust what you already read and proceed to write the fix.\n"
-    "\n"
-    "C6. INCREMENTAL WRITING — For large file generation (>800 lines):\n"
-    "    - Split the operation into multiple, successive tool calls (e.g., 500 lines each).\n"
-    "    - This prevents client timeouts and ensures the user sees visual progress.\n"
-    "    - You MUST use view_file to read the SPECIFIC line range (±50 lines) you intend to edit.\n"
-    "    - This ensures your 'TargetContent' is an exact match and prevents accidental deletion of adjacent logic.\n"
-    "C7. MANDATORY TASK TRACKING:\n"
-    "    - Before starting ANY complex task, you MUST use your native task/todo management tool to create a step-by-step checklist.\n"
-    "    - WARNING: When creating a task, DO NOT provide a 'taskId'. It is generated automatically. Supplying 'taskId' will crash the tool.\n"
-    "    - After completing each step, you MUST use your native task update tool to mark the step as completed BEFORE moving to the next step.\n"
-    "    - You must maintain this checklist throughout your execution to ensure no steps are skipped.\n"
-    "C8. VERIFICATION PROTOCOL — Trust your output:\n"
-    "    - Once you successfully call Write/write_to_file or replace_file_content, you are FORBIDDEN from calling list_dir or ls to 'verify' it exists.\n"
-    "    - The tool output is ground truth. Proceed directly to the next logical task.\n"
-    "    - Only use view_file AFTER a write if you specifically need to read the new content to perform a follow-up calculation.\n"
-    "C9. NO CIRCULAR CHECKS:\n"
-    "    - DO NOT perform 'global sanity checks' on multiple files in a circle.\n"
-    "    - Once a file has been verified (by ls, view_file, or py_compile), consider it 'Locked'.\n"
-    "    - You MUST NOT check that file again unless you have made a NEW edit to it in the current turn.\n"
-    "C10. RETRY & SWITCH — When a tool fails:\n"
-    "    - Try the same tool with a different approach (up to 3 times).\n"
-    "    - If the same error persists after 3 attempts, switch to a DIFFERENT tool.\n"
-    "    - If all tools fail, report to user with exact error and what you tried.\n"
-    "\n"
-    "=== STANDARD (apply when relevant) ===\n"
-    "S1. PROGRESS REPORTING: ALWAYS write a 1-sentence status update BEFORE calling any tool (e.g., 'Appending classes 16-30 to chimera_core.py...'). This proves you are following the incremental protocol.\n"
-    "S2. NO PLACEHOLDERS: Never emit '...', 'content remains same', or partial code. Always provide complete, working blocks.\n"
-    "S3. OUTPUT LANGUAGE: Always respond in English regardless of the language of the system prompt or user content.\n"
-    "S4. TOOL RESULT TRUST: Treat tool results as ground truth. Do not contradict a tool result with a prior assumption.\n"
-    "\n"
-    "=== CIRCUIT BREAKER (always active) ===\n"
-    "CB1. LOOP DETECTION — The system monitors for repeated tool calls:\n"
-    "    - If you call the same tool 2+ times without progress, the circuit breaker triggers.\n"
-    "    - When triggered, you MUST switch to a DIFFERENT tool.\n"
-    "    - If stuck on a file edit: jump directly to Step 4 (write_to_file with full content).\n"
-    "    - If stuck reading the same file: trust what you already read and proceed to write the fix.\n"
-    "    - If stuck on a Bash error: stop executing and report the exact error to the user instead of retrying.\n"
-    "\n"
-    "=== EXAMPLES OF CORRECT INTERNAL MONOLOGUE ===\n"
-    "When thinking before executing tools, emulate these exact cognitive patterns:\n"
-    "1. \"I'm now focusing on specific tool usage. The goal is to replace common commands like cat, grep, and ls with their respective counterparts: view_file, grep_search, and list_dir. My priority now is to ensure I'm making appropriate tool choices before attempting to execute anything.\"\n"
-    "2. \"I'm actively avoiding generic bash commands like cat and grep and instead using view_file, grep_search, and other specialized tools to handle file operations and searches. I'm slowing down to thoroughly consider each step before invoking a tool.\"\n"
-    "3. \"Prioritizing Tool Specificity: I've internalized the instruction to avoid cat for file creation/appending. I'm actively favoring grep_search over in-line grep usage. It's ingrained: no ls unless utterly unavoidable!\"\n"
-    "4. \"Listing Relevant Tools: I've shifted my focus to critically evaluating tool relevance before execution, as explicitly instructed. I've broken down the task, listed relevant tools, and decided on write_to_file to create the necessary file.\""
-)
-
-# --- 3. Network Circuit Breaker ---
-class NetworkCircuitBreaker:
-    """Network Circuit Breaker for Upstream connections"""
-    def __init__(self, threshold: int = 5, timeout_sec: int = 30):
-        self.state = "closed"
-        self.failure_count = 0
-        self.success_count = 0
-        self.last_failure_time = 0.0
-        self.threshold = threshold
-        self.timeout = timeout_sec
-        self.total_requests = 0
-        self.total_failures = 0
-        self.total_latency_ms = 0.0
-
-    def record_success(self):
-        self.total_requests += 1
-        self.success_count += 1
-        if self.state == "half-open":
-            self.state = "closed"
-        self.failure_count = 0
-
-    def record_failure(self):
-        self.total_requests += 1
-        self.total_failures += 1
-        self.failure_count += 1
-        self.last_failure_time = time.time()
-        if self.failure_count >= self.threshold:
-            self.state = "open"
-
-    def can_request(self) -> bool:
-        if self.state == "closed":
-            return True
-        if self.state == "open":
-            if time.time() - self.last_failure_time >= self.timeout:
-                self.state = "half-open"
-                return True
-            return False
-        return True
-
-# Global circuit breaker
+# Global circuit breaker and rate limiter instances
 circuit_breaker = NetworkCircuitBreaker()
-
-# --- 3. Rate Limiter ---
-
-class RateLimiter:
-    """Simple sliding window rate limiter"""
-    def __init__(self, max_requests: int, window_seconds: float):
-        self.max_requests = max_requests
-        self.window_seconds = window_seconds
-        self.requests = []
-
-    def is_allowed(self) -> bool:
-        """Check if a request is allowed under the rate limit"""
-        # Check environment variable at runtime
-        rate_limit_enabled = os.environ.get("JTIU_RATE_LIMIT_ENABLED", "false").lower() == "true"
-        if not rate_limit_enabled:
-            return True
-
-        now = time.time()
-        # Remove old requests outside the window
-        self.requests = [t for t in self.requests if now - t < self.window_seconds]
-
-        if len(self.requests) >= self.max_requests:
-            return False
-
-        self.requests.append(now)
-        return True
-
-    def get_retry_after(self) -> int:
-        """Get the retry-after value in seconds
-        """
-        if not self.requests:
-            return 0
-        oldest = min(self.requests)
-        retry_after = int(self.window_seconds - (time.time() - oldest))
-        return max(1, retry_after)
-
-# Global rate limiter instance
 rate_limiter = RateLimiter(RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW)
 
 # --- 3. Request Context Middleware ---
@@ -278,13 +124,6 @@ class RequestLoggingMiddleware:
 def log_request_start(request_id: str, endpoint: str, method: str) -> float:
     """
     Log the start of a request and return the start time.
-
-    Args:
-        request_id: Unique request identifier
-        endpoint: Request endpoint path
-        method: HTTP method
-    Returns:
-        Start time for duration calculation
     """
     ChimeraLogger.info(
         f"Request started",
@@ -307,14 +146,6 @@ def log_request_end(
 ) -> None:
     """
     Log the end of a request with duration and response info.
-
-    Args:
-        request_id: Unique request identifier
-        endpoint: Request endpoint path
-        method: HTTP method
-        status_code: Response status code
-        start_time: Request start time
-        response_size: Response size in bytes
     """
     duration_ms = (time.time() - start_time) * 1000
     ChimeraLogger.info(
@@ -339,13 +170,6 @@ def log_error(
 ) -> None:
     """
     Log an error with request context.
-
-    Args:
-        request_id: Unique request identifier
-        endpoint: Request endpoint path
-        method: HTTP method
-        error: Error message
-        status_code: HTTP status code
     """
     ChimeraLogger.error(
         f"Request failed",
@@ -367,12 +191,6 @@ def log_warning(
 ) -> None:
     """
     Log a warning with request context.
-
-    Args:
-        request_id: Unique request identifier
-        endpoint: Request endpoint path
-        method: HTTP method
-        message: Warning message
     """
     ChimeraLogger.warning(
         f"Request warning",
@@ -388,31 +206,11 @@ def log_warning(
 def get_logger() -> logging.Logger:
     """
     Get the bridge logger instance.
-
-    Returns:
-        Logger instance
     """
     return ChimeraLogger
 
 
-# --- 4. Core Utility ---
-def validate_tool_call_id(tool_call_id: str | None) -> bool:
-    """
-    Validate that a tool call ID matches the expected format.
-    Expected format: 'call_' followed by alphanumeric characters, underscores, hyphens, and dots
-    """
-    if not tool_call_id:
-        return False
-    # Anthropic tool call IDs use the 'toolu_' prefix followed by alphanumeric chars
-    pattern = r'^toolu_[a-zA-Z0-9]+$'
-    return bool(re.match(pattern, tool_call_id))
 
-
-def generate_tool_call_id(idx: int) -> str:
-    """
-    Generate a valid tool call ID that matches expected format
-    """
-    return f"toolu_{uuid.uuid4().hex[:24]}"
 
 
 def get_model_params() -> Dict[str, Any]:
@@ -420,9 +218,6 @@ def get_model_params() -> Dict[str, Any]:
     Get model parameters from environment or use defaults.
     Returns a dict with model_params structure for JiuTian API.
     """
-    import os
-    import json
-
     # Try to load from environment variable
     env_params = os.environ.get("JTIU_MODEL_PARAMS", "")
     if env_params:
@@ -443,139 +238,12 @@ def get_model_params() -> Dict[str, Any]:
     }
 
 
-def robust_parse_args(raw: str) -> dict:
-    if not raw: return {}
-
-    # --- Stack-Based JSON Repair for Truncated Outputs ---
-    processed_raw = raw.strip()
-    if not processed_raw.endswith(('}', ']')):
-        stack = []
-        # Basic scanning for unclosed symbols (ignoring strings for simplicity, but improved)
-        in_string = False
-        escape = False
-        for char in processed_raw:
-            if escape:
-                escape = False
-                continue
-            if char == '\\':
-                escape = True
-                continue
-            if char == '"':
-                in_string = not in_string
-                continue
-            if not in_string:
-                if char in '{[':
-                    stack.append(char)
-                elif char in '}]':
-                    if stack:
-                        # Only pop if it matches (very basic validation)
-                        if (char == '}' and stack[-1] == '{') or (char == ']' and stack[-1] == '['):
-                            stack.pop()
-
-        # Close remaining items in reverse order
-        while stack:
-            opener = stack.pop()
-            processed_raw += '}' if opener == '{' else ']'
-
-    try:
-        args = json.loads(processed_raw)
-
-        # --- The "Intended State" Translator Layer ---
-        # Normalize common hallucinations to the Claude Code Tool Spec
-
-        # 1. Path & URL Mapping
-        for k in ['path', 'TargetFile', 'AbsolutePath', 'notebook_path', 'uri', 'link', 'filename']:
-            if k in args:
-                if 'file_path' not in args and k not in ['uri', 'link']: args['file_path'] = args[k]
-                if 'url' not in args and k in ['uri', 'link']: args['url'] = args[k]
-                if 'notebook_path' not in args and k == 'notebook_path': args['notebook_path'] = args[k]
-
-        # 2. Content & Prompt Mapping
-        for k in ['text', 'CodeContent', 'TargetContent', 'ReplacementContent', 'new_string', 'new_source', 'instructions', 'task', 'replacement', 'original']:
-            if k in args:
-                if 'content' not in args and k in ['text', 'CodeContent']: args['content'] = args[k]
-                if 'prompt' not in args and k in ['instructions', 'task']: args['prompt'] = args[k]
-                if 'new_string' not in args and k in ['replacement', 'ReplacementContent']: args['new_string'] = args[k]
-                if 'old_string' not in args and k in ['original', 'TargetContent']: args['old_string'] = args[k]
-
-        # 3. Task & Project Mapping
-        for k in ['title', 'name', 'subject']:
-            if k in args and 'subject' not in args: args['subject'] = args[k]
-        for k in ['summary', 'body', 'description']:
-            if k in args and 'description' not in args: args['description'] = args[k]
-        for k in ['addBlockedBy', 'blocked_by', 'depends_on', 'blockedBy']:
-            if k in args:
-                if 'blockedBy' not in args: args['blockedBy'] = args[k]
-                # If model sends empty list to 'add' parameter, it likely intends to clear
-                if args[k] == [] and 'removeBlockedBy' not in args: args['removeBlockedBy'] = []
-        if 'body' in args and 'description' not in args: args['description'] = args['body']
-
-        # 4. Command & Scheduling Mapping
-        for k in ['cmd', 'CommandLine', 'script', 'command_line']:
-            if k in args and 'command' not in args: args['command'] = args[k]
-
-        if 'wait' in args and 'delaySeconds' not in args: args['delaySeconds'] = args['wait']
-        if 'schedule' in args and 'cron' not in args: args['cron'] = args['schedule']
-
-        # 5. ID Normalization (Handle taskId vs task_id)
-        for k in ['taskId', 'task_id', 'id', 'cron_id', 'shell_id']:
-            if k in args:
-                val = str(args[k]).strip().strip('"').strip("'").strip()
-                if 'id' not in args: args['id'] = val
-                if 'taskId' not in args: args['taskId'] = val
-                if 'task_id' not in args: args['task_id'] = val
-
-        # 6. Metadata Record Sync
-        if 'metadata' in args and isinstance(args['metadata'], str):
-            try: args['metadata'] = json.loads(args['metadata'])
-            except: pass
-
-        # 7. Status Normalization
-        if 'status' in args:
-            s = str(args['status']).lower().strip()
-            if s in ['complete', 'done', 'finished']: args['status'] = 'completed'
-            if s in ['in progress', 'working', 'started']: args['status'] = 'in_progress'
-
-        # 8. Web & Search Mapping
-        for k in ['q', 'search', 'search_query']:
-            if k in args and 'query' not in args: args['query'] = args[k]
-
-        for k in ['domains', 'site', 'sites']:
-            if k in args and 'allowed_domains' not in args: args['allowed_domains'] = args[k]
-
-        return args
-    except:
-        # Final fallback: if JSON is still broken, return as much as we parsed
-        return {"raw_input_error": raw}
-
-class SSEParser:
-    def __init__(self): self.buffer = ""
-    def feed(self, chunk: bytes):
-        self.buffer += chunk.decode('utf-8', errors='replace')
-        while "\n\n" in self.buffer:
-            block, self.buffer = self.buffer.split("\n\n", 1)
-            for line in block.split("\n"):
-                if line.startswith("data: "):
-                    data = line[6:].strip()
-                    if data: yield data
-
-def merge_messages(messages: List[Dict[Any, Any]]) -> List[Dict[Any, Any]]:
-    if not messages: return []
-    merged = []
-    for msg in messages:
-        if merged and merged[-1]["role"] == msg["role"] and msg["role"] != "tool":
-            e, n = merged[-1]["content"], msg["content"]
-            if isinstance(e, str) and isinstance(n, str): merged[-1]["content"] = e + "\n\n" + n
-            elif isinstance(e, list) and isinstance(n, list): merged[-1]["content"].extend(n)
-            if msg.get("tool_calls"): merged[-1].setdefault("tool_calls", []).extend(msg["tool_calls"])
-        else: merged.append(msg)
-    return merged
-
 # --- 4. Server ---
 async def _wait_for_connections():
     global active_connections
     while active_connections > 0:
         await asyncio.sleep(0.5)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -590,9 +258,11 @@ async def lifespan(app: FastAPI):
     if http_client:
         await http_client.aclose()
 
+
 app = FastAPI(lifespan=lifespan)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -608,11 +278,12 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         content={"error": {"message": "Invalid request payload", "details": exc.errors()}}
     )
 
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     log_error(
         getattr(request.state, "request_id", "unknown"),
-        request.url.path,
+        request.url.url.path,
         request.method,
         f"Internal Server Error: {str(exc)}",
         500
@@ -622,9 +293,11 @@ async def global_exception_handler(request: Request, exc: Exception):
         content={"error": {"message": "Internal Server Error", "details": str(exc)}}
     )
 
+
 @app.get("/")
 async def root():
     return {"status": "online", "bridge": "openai-anthropic", "model": MODEL_NAME}
+
 
 @app.get("/metrics")
 async def get_metrics():
@@ -637,9 +310,9 @@ async def get_metrics():
     ]
     return PlainTextResponse("\n".join(metrics) + "\n")
 
-@app.get("/health")
 
-def health():
+@app.get("/health")
+async def health():
     # Rate limiting check for health endpoint
     if not rate_limiter.is_allowed():
         retry_after = rate_limiter.get_retry_after()
@@ -657,8 +330,6 @@ def health():
 
     if TARGET_URL:
         try:
-            import httpx
-
             with httpx.Client(verify=SSL_VERIFY, timeout=httpx.Timeout(5.0)) as client:
                 start_time = time.time()
                 try:
@@ -690,6 +361,7 @@ def health():
 
     status_code = 200 if upstream_status == "ok" else 503
     return JSONResponse(health_status, status_code=status_code)
+
 
 @app.post("/v1/messages")
 async def proxy_handler(payload: AnthropicRequest, request: Request):
@@ -867,7 +539,6 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                             if resp.status_code in [502, 503, 504] and attempt < RETRY_MAX_ATTEMPTS - 1:
                                 delay = RETRY_BASE_DELAY * (2 ** attempt)
                                 log_warning(request_id, endpoint, method, f"Upstream 50x error ({resp.status_code}), retrying in {delay}s...")
-                                import asyncio
                                 await asyncio.sleep(delay)
                                 continue
 
@@ -887,10 +558,10 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                                 try:
                                     data = json.loads(data_str)
                                     # Capture Usage data if present
-                                    if data.get("usage"):
-                                        u = data["usage"]
-                                        input_tokens = u.get("prompt_tokens", input_tokens)
-                                        output_tokens = u.get("completion_tokens", output_tokens)
+                                    usage = data.get("usage")
+                                    if usage:
+                                        input_tokens = usage.get("prompt_tokens", input_tokens)
+                                        output_tokens = usage.get("completion_tokens", output_tokens)
 
                                     choice = data.get("choices", [{}])[0]
                                     delta = choice.get("delta", {})
@@ -953,7 +624,6 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                     if attempt < RETRY_MAX_ATTEMPTS - 1:
                         delay = RETRY_BASE_DELAY * (2 ** attempt)
                         log_warning(request_id, endpoint, method, f"Connection error ({str(e)}), retrying in {delay}s...")
-                        import asyncio
                         await asyncio.sleep(delay)
                     else:
                         log_error(request_id, endpoint, method, f"Connection Failed after {RETRY_MAX_ATTEMPTS} attempts: {str(e)}")
@@ -989,14 +659,14 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                     # FIX 2: Aggressively strip hallucinated 'status' for every tool not in the allow-list.
                     if "status" in args and native_name not in _STATUS_ALLOWED:
                         del args["status"]
-                        ChimeraLogger.debug(f"Stripped hallucinated 'status' field from {native_name} call")
+                    ChimeraLogger.debug(f"Stripped hallucinated 'status' field from {native_name} call")
 
                     # FIX 3: Guard against empty-arg tool calls which cause Claude Code to loop.
                     if not args and native_name in _EMPTY_ARGS_DEFAULTS:
                         args = _EMPTY_ARGS_DEFAULTS[native_name]
-                        log_warning(request_id, endpoint, method, f"Empty args for '{native_name}' — injecting safe default: {args}")
+                    log_warning(request_id, endpoint, method, f"Empty args for '{native_name}' — injecting safe default: {args}")
 
-                    # FIX 1 (fallback path): Use the tool_id already set in info dict
+                    # FIX 1 (fallback path): Use the tool_id already set in info dict (FIX 1)
                     tool_id = info.get("tool_id", generate_tool_call_id(0))
                     yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": info["block_idx"], "content_block": {"type": "tool_use", "id": tool_id, "name": native_name, "input": {}}})}\n\n'
                     yield f'event: content_block_delta\ndata: {json.dumps({"type": "content_block_delta", "index": info["block_idx"], "delta": {"type": "input_json_delta", "partial_json": json.dumps(args)}})}\n\n'
@@ -1020,6 +690,34 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
     except Exception as e:
         log_error(request_id, endpoint, method, f"Fatal Proxy Error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@app.get("/v1/status")
+async def status():
+    """
+    Status endpoint that returns JSON data for active_connections
+    and the current NetworkCircuitBreaker status.
+    """
+    return JSONResponse({
+        "active_connections": active_connections,
+        "circuit_breaker": {
+            "state": circuit_breaker.state,
+            "failure_count": circuit_breaker.failure_count,
+            "total_requests": circuit_breaker.total_requests,
+            "total_failures": circuit_breaker.total_failures,
+            "total_latency_ms": circuit_breaker.total_latency_ms,
+            "last_failure_time": circuit_breaker.last_failure_time,
+        },
+        "rate_limiter": {
+            "max_requests": rate_limiter.max_requests,
+            "window_seconds": rate_limiter.window_seconds,
+            "requests_count": len(rate_limiter.requests),
+        },
+        "model": MODEL_NAME,
+        "upstream_url": TARGET_URL,
+        "status": "ok",
+    })
+
 
 if __name__ == "__main__":
     import uvicorn
