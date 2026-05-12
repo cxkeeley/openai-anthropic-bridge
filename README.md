@@ -1,90 +1,67 @@
 # Claude Bridge for JiuTian (九天) Model
 
-This repository contains a robust bridge application that allows you to use the China Mobile JiuTian (九天) AI model with both the Anthropic and OpenAI API formats. The bridge translates between these API formats, enabling seamless integration with agentic CLI tools like Claude Code.
+This repository contains a production-grade, modular bridge application that allows you to use the China Mobile JiuTian (九天) AI model with both the Anthropic and OpenAI API formats. The bridge is compiled with Cython for high performance and hardened with proactive circuit breakers to ensure stable agentic communication.
 
-## Features
+## Key Features
 
-- **Dual API Support**: Native Anthropic API (`/v1/messages`) and OpenAI-compatible (`/v1/chat/completions`) endpoints
-- **Antigravity Expert Mode**: High-precision "Antigravity Expert Mode" with hierarchical rules for tool selection, escalation ladders for failures, and circuit breakers to detect and break agentic loops
-- **Model Parameters**: Configurable model parameters (temperature, max_tokens, penalties) via `JTIU_MODEL_PARAMS`
-- **Rate Limiting**: Optional rate limiting with configurable requests per window
-- **Docker Compose Ready**: One-click containerization with `gunicorn` for parallel thread processing
-- **Tool Call ID Pinning**: Preserves upstream tool call IDs to prevent the infinite execution loops common in high-concurrency environments (e.g., H200 inference).
-- **Hallucinated Argument Stripping**: Aggressively strips hallucinated `status` fields and other metadata from tool calls to ensure schema compliance with the Claude Code CLI.
-- **Empty Argument Guard**: Automatically injects safe defaults (e.g., `path: "."` for `ls`) when the model sends empty tool arguments, preventing CLI hangs.
-- **Intelligent Argument Mapping**: Robustly maps common model hallucinations (e.g., mapping `TargetFile` or `AbsolutePath` to `file_path`) to the standard tool schema.
-- **Auto-Healing Streams**: Real-time bracket interpolation fixes tokenization glitches during Server-Sent Event (SSE) streaming.
-- **Localization Override**: Forces the native model to communicate in strict English rather than Chinese defaults.
+- **Modular Architecture**: Core logic is isolated into a compiled `core/` package for maximum stability and performance.
+- **Zero-Source Deployment**: Production containers run exclusively from Cython-compiled `.so` binaries—no source `.py` files in the runtime environment.
+- **Antigravity Expert Mode**: High-precision system persona with hierarchical rules for tool selection and escalation ladders for edit failures.
+- **Hardened Loop Prevention**:
+    - **Proactive**: In-persona instructions forcing tool switching after repeated failures.
+    - **Reactive**: Real-time circuit breaker that monitors all Bash commands and tool calls, injecting loop-break warnings when redundancy is detected.
+- **Live Monitoring**: New `/v1/status` endpoint providing real-time JSON metrics on active connections and circuit breaker health.
+- **Tool Call ID Pinning**: Strictly uses the `toolu_` namespace to ensure seamless correlation with Claude Code agents.
+- **Dynamic Scaling**: Optimized Gunicorn configuration that scales workers dynamically based on CPU cores.
+- **Dual API Support**: Native Anthropic API (`/v1/messages`) and OpenAI-compatible (`/v1/chat/completions`) endpoints.
 
 ## Prerequisites
 
-- Python 3.10+ (For local bare-metal run)
-- Docker & Docker Compose (Recommended)
+- Python 3.10+ (For compilation/local run)
+- Docker & Docker Compose (Recommended for production)
 
-## Installation
+## Installation & Deployment
 
-1. Clone this repository:
-   ```bash
-   git clone <repository-url>
-   cd <repository-name>
-   ```
+The recommended way to deploy is using the automated build script:
 
-2. Copy the example configuration to your secure local environment context:
+1. Clone the repository and configure `.env`:
    ```bash
    cp .env.example .env
+   # Edit .env with your JTIU_TOKEN and TARGET_URL
    ```
 
-3. Open `.env` and paste in your active JWT Access Token.
-
-## Usage
-
-### Method 1: Using Docker Compose (Highly Recommended)
-
-The bridge utilizes Gunicorn threaded workers to sustain multiple parallel SSE streams. Docker handles this optimally.
-
-```bash
-docker compose up --build -d
-
-# To view live generation logs:
-docker compose logs -f
-```
-
-### Method 2: Local Python Execution
-
-If you wish to run the app manually without Docker:
-```bash
-pip install -r requirements.txt
-./start_fastapi_bridge.sh
-```
+2. Run the automated deployment script:
+   ```bash
+   ./deploy.sh
+   ```
+   *This script handles Cython compilation, artifact cleanup, and Docker Compose restart.*
 
 ## Configure Environment (.env)
 
-The bridge dynamically reads variables from your `.env` file mapping.
-
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `HOST` | Host to bind to | `0.0.0.0` |
-| `PORT` | Port to listen on | `8000` |
+| `PORT` | Port to listen on | `57123` |
 | `JTIU_TARGET_URL` | Target JiuTian service URL | (Required) |
 | `JTIU_TOKEN` | Authentication JWT token | (Required) |
 | `JTIU_MODEL` | Target model name | `jt_indonesia` |
-| `JTIU_SYSTEM_OVERRIDE` | System prompt override | (Optional) |
-| `JTIU_SSL_VERIFY` | SSL verification | `true` |
-| `JTIU_RATE_LIMIT_ENABLED` | Enable rate limiting | `false` |
-| `JTIU_RATE_LIMIT_REQUESTS` | Max requests per window | `10` |
-| `JTIU_RATE_LIMIT_WINDOW` | Time window in seconds | `60.0` |
-| `JTIU_MODEL_PARAMS` | Model parameters in JSON format | (Optional) |
+| `JTIU_UPSTREAM_TIMEOUT`| Timeout for upstream requests | `600.0` |
+
+## Monitoring & Health
+
+The bridge provides dedicated endpoints for observability:
+
+- **Status**: `GET http://localhost:57123/v1/status` (Metrics, Circuit Breaker state)
+- **Health**: `GET http://localhost:57123/health` (Upstream connectivity check)
+- **Metrics**: `GET http://localhost:57123/metrics` (Prometheus-compatible format)
 
 ## Connect Claude Code
 
-To use Claude Code with your local bridge, set these environment variables:
+To use Claude Code with your bridge:
 
 ```bash
-# Point Claude at your localhost bridge
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8000`
-
-# Enter any string, the proxy ignores this and uses JTIU_TOKEN
-export ANTHROPIC_API_KEY="sk-any-key`
+# Point Claude at your bridge port
+export ANTHROPIC_BASE_URL="http://127.0.0.1:57123"
+export ANTHROPIC_API_KEY="sk-any-key"
 
 # Launch the agent
 claude
@@ -92,25 +69,13 @@ claude
 
 ## Project Structure
 
-- `fastapi_bridge.py`: Main FastAPI application with Antigravity Expert Mode
-- `start_fastapi_bridge.sh`: Enhanced startup script for FastAPI bridge
-- `start_claude.sh`: Alternative startup script
-- `requirements.txt`: Python dependencies
-- `docker-compose.yml`: Docker Compose configuration
-- `Dockerfile`: Docker image definition
-- `.env.example`: Example environment configuration file
-- `.claude/`: Claude Code project settings (optional)
-- `legacy/`: Legacy code directory
-- `test/`: Test files directory
-
-## Troubleshooting
-
-### Streaming Freezes or Hanging Requests
-If your CLI abruptly stops, verify that you are running via Docker. Development Flask servers cannot handle concurrent HTTP chunked stream protocols cleanly on Windows. Use `docker compose` which deploys a dedicated Gunicorn WSGI matrix.
-
-### Out of Bounds / File Security Warning
-With `claude-code`, the prompt constraints force the model to stay inside the project root (`./`). If the model ignores this and reads `/home/`, Claude will trigger a manual verification prompt.
+- `core/`: Compiled package containing `persona`, `transformers`, `security`, and `logger`.
+- `fastapi_bridge.py`: Main entry point and server orchestration.
+- `setup_cython.py`: Build configuration for machine-code compilation.
+- `deploy.sh`: Automated production deployment and cleanup script.
+- `docker-compose.yml`: Infrastructure configuration with DNS stability fixes.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License.
+

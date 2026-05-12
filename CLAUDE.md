@@ -1,156 +1,49 @@
 # Claude Bridge for JiuTian (九天) Model
 
-## Purpose
+## 🏗️ Architecture Summary
 
-This repository contains a bridge application that allows the JiuTian (九天) AI model to be used with both the Anthropic and OpenAI API formats. The bridge translates between these API formats, enabling seamless integration with various AI development tools and platforms.
+The bridge is a production-grade proxy that translates between the Anthropic and OpenAI API formats, specifically hardened for agentic CLI tools like Claude Code.
 
-## Project Structure
+### Modular Package Structure (`core/`)
+- **`core/persona.py`**: Contains the `EXPERT_PERSONA` (Antigravity Expert Mode) rules.
+- **`core/transformers.py`**: Logic for robust JSON parsing, message merging, and tool ID generation.
+- **`core/security.py`**: Implementation of `NetworkCircuitBreaker` and `RateLimiter`.
+- **`core/logger.py`**: Structured JSON logging infrastructure (`ChimeraLogger`).
 
-- `claude_bridge.py`: Main application with enhanced error handling and configuration
-- `simple_bridge.py`: Basic implementation of the bridge functionality
-- `start_claude_bridge.sh`: Enhanced startup script with better configuration options
-- `test_claude_bridge.py`: Comprehensive test suite for the bridge
-- `test-jiutien.py`: Additional test script for the JiuTian model
-- `requirements.txt`: Python dependencies
-- `README.md`: Project documentation
+## 🛠️ Deployment & Build
 
-## Key Features
+### High-Performance Binary Run
+The project uses Cython to compile Python source code into machine-code binaries (`.so` files) for deployment.
+- **Build Command**: `./deploy.sh`
+- **Manual Build**: `python3 setup_cython.py build_ext --inplace`
+- **Zero-Source Policy**: Production Docker containers exclude all `.py` and `.c` files, running exclusively from compiled shared objects.
 
-1. **Dual API Support**
-   - Anthropic API compatible endpoint at `/v1/messages`
-   - OpenAI API compatible endpoint at `/v1/chat/completions`
+### Environment Standards
+- **Port**: `57123` (Standardized across infrastructure)
+- **Runtime**: Python 3.10 inside a Debian-based slim container.
+- **Server**: Gunicorn with Uvicorn workers, scaling dynamically: `$(2 * nproc + 1)`.
 
-2. **Flexible Configuration**
-   - Command-line arguments
-   - Environment variables
-   - Default values
+## 🛡️ Coding Standards & Rules
 
-3. **Robust Error Handling**
-   - Comprehensive error handling for API requests
-   - Proper status code propagation
-   - Detailed logging
+- **Minimalism**: Write the simplest code possible. Keep the codebase modular.
+- **DRY**: Shared logic belongs in `core/`. Providers must not import from each other.
+- **Encapsulation**: Use accessors (e.g., `set_current_task()`) for internal state.
+- **No Type Ignores**: Fix the underlying type issue; never use `# type: ignore`.
+- **Performance**: Use list accumulation for strings, cache env vars at init, prefer iterative over recursive.
+- **Zero-Defect Engineering**: Root-cause analysis for bugs; test-driven development for new features.
 
-4. **Streaming Support**
-   - Full support for streaming responses
-   - Proper event stream formatting
-   - Client-side compatibility with both API formats
+## 📡 API Endpoints
 
-5. **Testing**
-   - Integration tests for both endpoints
-   - Health check endpoint testing
-   - Proper resource cleanup
+- **Anthropic**: `POST /v1/messages` (Primary)
+- **OpenAI**: `POST /v1/chat/completions` (Secondary)
+- **Monitoring**: `GET /v1/status` (Active connections, circuit breaker state)
+- **Health**: `GET /health` (Upstream probe)
+- **Metrics**: `GET /metrics` (Prometheus)
 
-## Usage
+## 🧪 Verification Protocol
 
-### Starting the Bridge
+1. **Syntax Check**: `python3 -m py_compile fastapi_bridge.py`
+2. **Build Test**: Run `./deploy.sh` and ensure all `.so` files are generated.
+3. **Smoke Test**: `curl -s http://localhost:57123/v1/status`
+4. **Agent Stress Test**: Verify that the circuit breaker triggers during tool-execution loops.
 
-```bash
-# Using the start script (recommended)
-./start_claude_bridge.sh
-
-# With custom port
-./start_claude_bridge.sh --port 8080
-
-# In debug mode
-./start_claude_bridge.sh --debug
-
-# Direct execution
-python claude_bridge.py --host=127.0.0.1 --port=8000
-```
-
-### Environment Variables
-
-- `JTIU_HOST`: Host to bind to (default: 127.0.0.1)
-- `JTIU_PORT`: Port to listen on (default: 8000)
-- `JTIU_TARGET_URL`: Target JiuTian service URL
-- `JTIU_TOKEN`: Authentication token
-
-### Connecting Claude Code
-
-```bash
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8000"
-export ANTHROPIC_API_KEY="sk-any-key"
-claude --model jt_indonesia
-```
-
-## Development
-
-### Running Tests
-
-```bash
-python test_claude_bridge.py
-```
-
-### Adding New Features
-
-When adding new features to the bridge:
-
-1. Update the `claude_bridge.py` file with the new functionality
-2. Add corresponding tests in `test_claude_bridge.py`
-3. Update this CLAUDE.md documentation
-4. Test thoroughly with both API endpoints
-
-### Code Style
-
-- Follow PEP 8 guidelines for Python code
-- Use descriptive variable and function names
-- Include docstrings for all functions and classes
-- Add comments for complex logic
-- Maintain consistent formatting
-
-## Architecture
-
-The bridge operates as a proxy server that translates between different API formats:
-
-1. **Request Flow**:
-   - Client sends request to bridge
-   - Bridge translates request format if needed
-   - Bridge forwards request to JiuTian model
-   - Bridge receives response
-   - Bridge translates response format if needed
-   - Bridge returns response to client
-
-2. **Key Components**:
-   - API endpoint handlers
-   - Request/response transformers
-   - Error handling middleware
-   - Configuration manager
-
-## Security Considerations
-
-- Use environment variables for sensitive data
-- Validate all incoming requests
-- Implement rate limiting in production
-- Use HTTPS in production environments
-- Rotate authentication tokens regularly
-
-## Deployment
-
-For production deployment:
-
-1. Use a process manager like systemd or supervisor
-2. Set up proper logging and monitoring
-3. Implement health checks
-4. Configure a reverse proxy (e.g., nginx)
-5. Set up SSL/TLS encryption
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Connection Refused**
-   - Ensure the bridge is running
-   - Check that the port is not in use
-   - Verify host and port configuration
-
-2. **Authentication Errors**
-   - Verify your token is correct and not expired
-   - Check that the target URL is accessible
-
-3. **Streaming Issues**
-   - Ensure your client supports Server-Sent Events (SSE)
-   - Check network connection stability
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
