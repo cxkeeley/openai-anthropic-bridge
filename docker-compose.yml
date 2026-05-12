@@ -1,21 +1,27 @@
-version: '3.8'
-
 services:
-  claude-bridge:
+  chimera-bridge:
     build: .
-    container_name: claude-bridge-proxy
+    container_name: chimera-bridge
     ports:
-      - "8000:8000"
+      - '57123:57123'
     env_file:
       - .env
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    environment:
+      - GODEBUG=netdns=go
+      - PORT=57123
+    volumes:
+      - ./logs:/app/logs
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:57123/health')"]
+      interval: 10s
       timeout: 10s
       retries: 3
     logging:
-      driver: "json-file"
+      driver: 'json-file'
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: '10m'
+        max-file: '3'

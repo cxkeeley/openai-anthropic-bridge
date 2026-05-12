@@ -20,7 +20,7 @@ show_usage() {
     echo "  -h, --help        Show this help message"
     echo ""
     echo "You can also set these via environment variables:"
-    echo "  JTIU_HOST, JTIU_PORT, JTIU_TARGET_URL, JTIU_TOKEN, JTIU_MODEL"
+    echo "  BRIDGE_HOST, BRIDGE_PORT, BRIDGE_TARGET_URL, BRIDGE_TOKEN, BRIDGE_MODEL"
     echo ""
     echo "Example: $0 --port 8080 --debug"
     exit 1
@@ -64,16 +64,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Use environment variables if set, otherwise use defaults or command line args
-HOST=${JTIU_HOST:-${HOST:-$DEFAULT_HOST}}
-PORT=${JTIU_PORT:-${PORT:-$DEFAULT_PORT}}
-TARGET_URL=${JTIU_TARGET_URL:-${TARGET_URL:-$DEFAULT_TARGET_URL}}
-TOKEN=${JTIU_TOKEN:-${TOKEN:-$DEFAULT_TOKEN}}
-MODEL=${JTIU_MODEL:-${MODEL:-jt_indonesia}}
+HOST=${BRIDGE_HOST:-${HOST:-$DEFAULT_HOST}}
+PORT=${BRIDGE_PORT:-${PORT:-$DEFAULT_PORT}}
+TARGET_URL=${BRIDGE_TARGET_URL:-${TARGET_URL:-$DEFAULT_TARGET_URL}}
+TOKEN=${BRIDGE_TOKEN:-${TOKEN:-$DEFAULT_TOKEN}}
+MODEL=${BRIDGE_MODEL:-${MODEL:-jt_indonesia}}
 
 # Export for the application
-export JTIU_TARGET_URL="$TARGET_URL"
-export JTIU_TOKEN="$TOKEN"
-export JTIU_MODEL="$MODEL"
+export BRIDGE_TARGET_URL="$TARGET_URL"
+export BRIDGE_TOKEN="$TOKEN"
+export BRIDGE_MODEL="$MODEL"
 
 # Set debug flag
 if [ -n "$DEBUG" ]; then

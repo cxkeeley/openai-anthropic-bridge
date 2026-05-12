@@ -1,24 +1,44 @@
-# TODO: Claude Code Bridge Optimization
+# Todo - Internal Use Bridge Enhancements
 
-Berikut adalah daftar bug yang ditemukan dan rencana peningkatan fitur berdasarkan referensi dari proxy eksternal.
+## Context
+This bridge is for **internal/local use only** - users run it locally to connect Claude Code to JiuTian. Authentication is NOT needed since:
+- Runs locally on 127.0.0.1:8000
+- User controls both bridge and Claude Code
+- Not exposed publicly
 
-## 1. Bug Kritis (Priority: High)
-- [x] **Missing Parameters on Truncated JSON**: Saat model Jiutian memotong JSON di tengah jalan, bridge gagal mengekstrak `file_path` dan `content`.
-    - *Solusi*: Berhasil diimplementasikan menggunakan `Robust JSON Extractor`.
-- [x] **Tool Streaming Desync**: Tool call yang di-stream secara live menyebabkan Claude Code menerima JSON yang tidak valid.
-    - *Solusi*: Berhasil diimplementasikan menggunakan `Buffer-and-Repair`.
-- [ ] **SSE Packet Fragmentation**: Parser SSE saat ini (`split("\n\n")`) bisa gagal jika paket data terpotong di level TCP.
-    - *Solusi*: Gunakan buffer byte-level yang lebih tangguh.
+## Priority 1: Request Validation & Reliability
+- [x] Add request validation for incoming requests (malformed requests)
+- [x] Add per-request timeout (currently uses default httpx timeout)
+- [x] Add graceful shutdown handling
+- [x] Add retry logic with exponential backoff for transient failures
+- [x] Add request/response size limits to prevent OOM
 
-## 2. Stabilitas Sistem (Priority: Medium)
-- [x] **Windows Console Resilience**: Bridge sering crash atau log tertahan jika terminal di-minimize/background.
-    - *Solusi*: Berhasil diimplementasikan menggunakan `AttachConsole`.
-- [x] **Error Propagation**: Jika API tujuan (asix.id) mengembalikan 503 atau 400, bridge mengirim `event: error` secara formal.
+## Priority 2: Observability
+- [x] Add metrics/export (Prometheus metrics endpoint)
+- [x] Add structured error responses with error codes
+- [x] Add request/response logging level configuration
+- [x] Add circuit breaker metrics (success/failure counts)
 
-## 3. Peningkatan Fitur (Organ Donor)
-- [ ] **Enhanced Message Merging**: Perbaiki `merge_messages` agar bisa menangani campuran tipe data (teks + gambar/file) dengan lebih baik.
-- [ ] **Intelligent Syntax Repair**: Tingkatkan `repair_code` agar lebih cerdas menangani blok `try-catch` dan template literal yang kompleks.
-- [x] **Logging Optimization**: Pastikan log selalu menggunakan karakter aman (ASCII) dan encoding UTF-8 untuk file.
+## Priority 3: Configuration
+- [ ] Add configuration file support (YAML/JSON) in addition to env vars
+- [ ] Add health check endpoint configuration
+- [ ] Add logging configuration (log level per module)
+- [ ] Add SSL/TLS configuration for upstream connections
 
----
-*Catatan: Prioritas utama adalah mengembalikan stabilitas "Buffer-and-Repair" agar audit sistem bisa berjalan tanpa error parameter hilang.*
+## Priority 4: Testing
+- [ ] Add tests for graceful shutdown
+- [ ] Add tests for request validation
+- [ ] Add tests for retry logic
+- [ ] Add tests for per-request timeout
+
+## Priority 5: Documentation
+- [ ] Add troubleshooting guide (common issues and fixes)
+- [ ] Add monitoring guide (metrics to watch)
+- [ ] Add configuration guide (all env vars and config file options)
+
+## Notes
+- Current bridge is production-grade for internal/local use
+- Authentication NOT needed for internal/local use
+- Priority 1 items should be added before any deployment
+- Priority 2 items recommended for production deployments with monitoring needs
+- Priority 3 items recommended for deployments with complex configuration needs

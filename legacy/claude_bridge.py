@@ -16,11 +16,11 @@ import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Configuration from environment
-TARGET_URL = os.environ.get("JTIU_TARGET_URL", "")
-TOKEN = os.environ.get("JTIU_TOKEN", "")
-MODEL_NAME = os.environ.get("JTIU_MODEL", "jt_indonesia")
-SYSTEM_OVERRIDE = os.environ.get("JTIU_SYSTEM_OVERRIDE", "")
-SSL_VERIFY = os.environ.get("JTIU_SSL_VERIFY", "true").lower() == "true"
+TARGET_URL = os.environ.get("BRIDGE_TARGET_URL", "")
+TOKEN = os.environ.get("BRIDGE_TOKEN", "")
+MODEL_NAME = os.environ.get("BRIDGE_MODEL", "jt_indonesia")
+SYSTEM_OVERRIDE = os.environ.get("BRIDGE_SYSTEM_OVERRIDE", "")
+SSL_VERIFY = os.environ.get("BRIDGE_SSL_VERIFY", "true").lower() == "true"
 
 class RobustSSEParser:
     """Robust parser for SSE streams that handles byte-level fragmentation."""

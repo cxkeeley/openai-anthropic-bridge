@@ -1,11 +1,16 @@
 # Ignore source files to force the use of the compiled .so binary
-fastapi_bridge.py
-fastapi_bridge.c
-setup_cython.py
+**/*.py
+**/*.c
+**/*.pyc
+**/*.pyo
+**/__pycache__
 
-# Ignore build artifacts
+# Ignore build artifacts and secrets
 build/
 __pycache__/
 .git/
 .env
+.env.bak
 bridge.log
+*.log
+.claude/

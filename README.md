@@ -1,90 +1,81 @@
-# Claude Bridge for JiuTian (九天) Model
+# Chimera Bridge (OpenAI to Anthropic)
 
-This repository contains a robust bridge application that allows you to use the China Mobile JiuTian (九天) AI model with both the Anthropic and OpenAI API formats. The bridge translates between these API formats, enabling seamless integration with agentic CLI tools like Claude Code.
+This repository contains **Chimera Bridge**, a production-grade, modular application that allows you to use any OpenAI-compatible AI model (like China Mobile JiuTian, NVIDIA NIM, or Groq) with the Anthropic API format. The bridge is compiled with Cython for high performance and hardened with proactive circuit breakers to ensure stable agentic communication.
 
-## Features
+## Key Features
 
-- **Agentic Capability**: Includes strict system prompt overrides to force models like `qwen3-coder-next` and `jt_indonesia` to emit perfect OpenAI JSON tooling hooks.
-- **Docker Compose Ready**: One-click containerization with `gunicorn` for parallel thread processing.
-- **Auto-Healing Streams**: Real-time bracket interpolation fixes tokenization glitches during Server-Sent Event (SSE) streaming.
-- **Localization Override**: Forces the native model to communicate in strict English rather than Chinese defaults.
+- **Modular Architecture**: Core logic is isolated into a compiled `core/` package for maximum stability and performance.
+- **Zero-Source Deployment**: Production containers run exclusively from Cython-compiled `.so` binaries—no source `.py` files in the runtime environment.
+- **Antigravity Expert Mode**: High-precision system persona with hierarchical rules for tool selection and escalation ladders for edit failures.
+- **Hardened Loop Prevention**:
+    - **Proactive**: In-persona instructions forcing tool switching after repeated failures.
+    - **Reactive**: Real-time circuit breaker that monitors all Bash commands and tool calls, injecting loop-break warnings when redundancy is detected.
+- **Live Monitoring**: New `/v1/status` endpoint providing real-time JSON metrics on active connections and circuit breaker health.
+- **Tool Call ID Pinning**: Strictly uses the `toolu_` namespace to ensure seamless correlation with Claude Code agents.
+- **Dynamic Scaling**: Optimized Gunicorn configuration that scales workers dynamically based on CPU cores.
+- **Dual API Support**: Native Anthropic API (`/v1/messages`) and OpenAI-compatible (`/v1/chat/completions`) endpoints.
 
 ## Prerequisites
 
-- Python 3.12+ (For local bare-metal run)
-- Docker & Docker Compose (Recommended)
+- Python 3.10+ (For compilation/local run)
+- Docker & Docker Compose (Recommended for production)
 
-## Installation
+## Installation & Deployment
 
-1. Clone this repository:
-   ```bash
-   git clone <repository-url>
-   cd <repository-name>
-   ```
+The recommended way to deploy is using the automated build script:
 
-2. Copy the example configuration to your secure local environment context:
+1. Clone the repository and configure `.env`:
    ```bash
    cp .env.example .env
+   # Edit .env with your BRIDGE_TOKEN and TARGET_URL
    ```
 
-3. Open `.env` and paste in your active JWT Access Token.
-
-## Usage
-
-### Method 1: Using Docker Compose (Highly Recommended)
-
-The bridge utilizes Gunicorn threaded workers to sustain multiple parallel SSE streams. Docker handles this optimally.
-
-```bash
-docker compose up --build -d
-
-# To view live generation logs:
-docker compose logs -f
-```
-
-### Method 2: Local Python Execution
-
-If you wish to run the app manually without Docker:
-```bash
-pip install -r requirements.txt
-./start_claude_bridge.sh
-```
+2. Run the automated deployment script:
+   ```bash
+   ./deploy.sh
+   ```
+   *This script handles Cython compilation, artifact cleanup, and Docker Compose restart.*
 
 ## Configure Environment (.env)
 
-The bridge dynamically reads variables from your `.env` file mapping.
-
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `HOST` | Host to bind to | `0.0.0.0` |
-| `PORT` | Port to listen on | `8000` |
-| `JTIU_TARGET_URL` | Target JiuTian service URL | `https://ai.asix.id.../chat/completions` |
-| `JTIU_TOKEN` | Authentication JWT token | (Required) |
-| `JTIU_MODEL` | Target coding model override | `qwen3-coder-next` |
+| `PORT` | Port to listen on | `57123` |
+| `BRIDGE_TARGET_URL` | Target JiuTian service URL | (Required) |
+| `BRIDGE_TOKEN` | Authentication JWT token | (Required) |
+| `BRIDGE_MODEL` | Target model name | `jt_indonesia` |
+| `BRIDGE_UPSTREAM_TIMEOUT`| Timeout for upstream requests | `600.0` |
+
+## Monitoring & Health
+
+The bridge provides dedicated endpoints for observability:
+
+- **Status**: `GET http://localhost:57123/v1/status` (Metrics, Circuit Breaker state)
+- **Health**: `GET http://localhost:57123/health` (Upstream connectivity check)
+- **Metrics**: `GET http://localhost:57123/metrics` (Prometheus-compatible format)
 
 ## Connect Claude Code
 
-To boot Anthropic's Claude Code utilizing your local proxy cluster, set these environment variables and run it:
+To use Claude Code with your bridge:
 
 ```bash
-# Point Claude at your localhost bridge
-export ANTHROPIC_BASE_URL="http://127.0.0.1:8000"
-
-# Enter any string, the proxy ignores this and uses JTIU_TOKEN
+# Point Claude at your bridge port
+export ANTHROPIC_BASE_URL="http://127.0.0.1:57123"
 export ANTHROPIC_API_KEY="sk-any-key"
 
 # Launch the agent
 claude
 ```
 
-## Troubleshooting
+## Project Structure
 
-### Streaming Freezes or Hanging Requests
-If your CLI abruptly stops, verify that you are running via Docker. Development Flask servers cannot handle concurrent HTTP chunked stream protocols cleanly on Windows. Use `docker compose` which deploys a dedicated Gunicorn WSGI matrix.
-
-### Out of Bounds / File Security Warning
-With `claude-code`, the prompt constraints force the model to stay inside the project root (`./`). If the model ignores this and reads `/home/`, Claude will trigger a manual verification prompt.
+- `core/`: Compiled package containing `persona`, `transformers`, `security`, and `logger`.
+- `fastapi_bridge.py`: Main entry point and server orchestration.
+- `setup_cython.py`: Build configuration for machine-code compilation.
+- `deploy.sh`: Automated production deployment and cleanup script.
+- `docker-compose.yml`: Infrastructure configuration with DNS stability fixes.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License.
+
