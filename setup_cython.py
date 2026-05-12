@@ -18,7 +18,8 @@ setup(
             "core/persona.py",
             "core/transformers.py",
             "core/security.py",
-            "core/logger.py"
+            "core/logger.py",
+            "core/metrics.py"
         ],
         compiler_directives={'language_level': "3"}
     ),

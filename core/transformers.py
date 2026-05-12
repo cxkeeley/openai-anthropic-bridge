@@ -193,7 +193,8 @@ class SSEParser:
         Feed a chunk of data to the parser.
         Yields complete SSE blocks.
         """
-        self.buffer += chunk.decode('utf-8', errors='replace')
+        decoded = chunk.decode('utf-8', errors='replace')
+        self.buffer += decoded
         while "\n\n" in self.buffer:
             block, self.buffer = self.buffer.split("\n\n", 1)
             for line in block.split("\n"):

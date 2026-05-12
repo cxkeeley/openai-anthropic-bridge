@@ -6,6 +6,7 @@ This repository contains **Chimera Bridge**, a production-grade, modular applica
 
 - **Modular Architecture**: Core logic is isolated into a compiled `core/` package for maximum stability and performance.
 - **Zero-Source Deployment**: Production containers run exclusively from Cython-compiled `.so` binaries—no source `.py` files in the runtime environment.
+- **Prometheus Metrics Engine**: Centralized tracking of latency, throughput, and circuit breaker states with a dedicated `/metrics` endpoint.
 - **Antigravity Expert Mode**: High-precision system persona with hierarchical rules for tool selection and escalation ladders for edit failures.
 - **Hardened Loop Prevention**:
     - **Proactive**: In-persona instructions forcing tool switching after repeated failures.
@@ -45,14 +46,15 @@ The recommended way to deploy is using the automated build script:
 | `BRIDGE_TOKEN` | Authentication JWT token | (Required) |
 | `BRIDGE_MODEL` | Target model name | `jt_indonesia` |
 | `BRIDGE_UPSTREAM_TIMEOUT`| Timeout for upstream requests | `600.0` |
+| `BRIDGE_RATE_LIMIT_ENABLED`| Enable rate limiting | `false` |
 
 ## Monitoring & Health
 
 The bridge provides dedicated endpoints for observability:
 
+- **Metrics**: `GET http://localhost:57123/metrics` (Prometheus-compatible format)
 - **Status**: `GET http://localhost:57123/v1/status` (Metrics, Circuit Breaker state)
 - **Health**: `GET http://localhost:57123/health` (Upstream connectivity check)
-- **Metrics**: `GET http://localhost:57123/metrics` (Prometheus-compatible format)
 
 ## Connect Claude Code
 

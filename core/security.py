@@ -7,6 +7,8 @@ This module contains security-related components:
 """
 import time
 import os
+from typing import Dict, Optional
+from .metrics import metrics_registry, MetricType
 
 
 class NetworkCircuitBreaker:
@@ -25,13 +27,25 @@ class NetworkCircuitBreaker:
         self.total_requests = 0
         self.total_failures = 0
         self.total_latency_ms = 0.0
+        self.circuit_breaker_trips = 0
+        
+        # Initialize metrics
+        metrics_registry.register_counter("bridge_requests_total", "Total requests processed by the bridge")
+        metrics_registry.register_counter("bridge_failures_total", "Total failed upstream requests")
+        metrics_registry.register_counter("bridge_circuit_breaker_trips_total", "Total times the circuit breaker has tripped")
+        metrics_registry.register_counter("bridge_latency_ms_total", "Total request latency in milliseconds")
+        metrics_registry.register_gauge("bridge_circuit_breaker_state", "Current state of the circuit breaker (0=closed, 1=open, 2=half-open)")
 
     def record_success(self):
         """Record a successful request."""
         self.total_requests += 1
         self.success_count += 1
+        metrics_registry.increment_counter("bridge_requests_total")
+        
         if self.state == "half-open":
             self.state = "closed"
+            metrics_registry.set_gauge("bridge_circuit_breaker_state", 0.0)
+            
         self.failure_count = 0
 
     def record_failure(self):
@@ -40,8 +54,16 @@ class NetworkCircuitBreaker:
         self.total_failures += 1
         self.failure_count += 1
         self.last_failure_time = time.time()
+        
+        metrics_registry.increment_counter("bridge_requests_total")
+        metrics_registry.increment_counter("bridge_failures_total")
+        
         if self.failure_count >= self.threshold:
-            self.state = "open"
+            if self.state != "open":
+                self.state = "open"
+                self.circuit_breaker_trips += 1
+                metrics_registry.increment_counter("bridge_circuit_breaker_trips_total")
+                metrics_registry.set_gauge("bridge_circuit_breaker_state", 1.0)
 
     def can_request(self) -> bool:
         """
@@ -49,10 +71,12 @@ class NetworkCircuitBreaker:
         Returns True if the circuit is closed or half-open and the timeout has passed.
         """
         if self.state == "closed":
+            metrics_registry.set_gauge("bridge_circuit_breaker_state", 0.0)
             return True
         if self.state == "open":
             if time.time() - self.last_failure_time >= self.timeout:
                 self.state = "half-open"
+                metrics_registry.set_gauge("bridge_circuit_breaker_state", 2.0)
                 return True
             return False
         return True
@@ -66,6 +90,8 @@ class RateLimiter:
         self.max_requests = max_requests
         self.window_seconds = window_seconds
         self.requests = []
+        self.rate_limit_drops = 0
+        metrics_registry.register_counter("bridge_rate_limit_drops_total", "Total requests dropped by the rate limiter")
 
     def is_allowed(self) -> bool:
         """
@@ -82,6 +108,8 @@ class RateLimiter:
         self.requests = [t for t in self.requests if now - t < self.window_seconds]
 
         if len(self.requests) >= self.max_requests:
+            self.rate_limit_drops += 1
+            metrics_registry.increment_counter("bridge_rate_limit_drops_total")
             return False
 
         self.requests.append(now)

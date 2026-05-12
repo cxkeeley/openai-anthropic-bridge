@@ -29,7 +29,7 @@ import asyncio
 # Import from core package
 from core import EXPERT_PERSONA
 from core import NetworkCircuitBreaker, RateLimiter
-from core import robust_parse_args, merge_messages, SSEParser, validate_tool_call_id, generate_tool_call_id, ChimeraLogger
+from core import robust_parse_args, merge_messages, SSEParser, validate_tool_call_id, generate_tool_call_id, ChimeraLogger, metrics_registry, MetricType
 
 load_dotenv()
 
@@ -346,6 +346,9 @@ async def health():
                 except Exception as e:
                     upstream_status = "error"
                     ChimeraLogger.warning(f"Upstream health check failed: {e}")
+                finally:
+                    duration_ms = (time.time() - start_time) * 1000
+                    metrics_registry.increment_counter("bridge_latency_ms_total", duration_ms)
         except Exception as e:
             upstream_status = "error"
             ChimeraLogger.warning(f"Health check error: {e}")
@@ -515,15 +518,17 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             "temperature": body.get("temperature", 0.0),
             "messages": messages,
             "tools": [{"type": "function", "function": {"name": t.get("name", ""), "description": t.get("description", ""), "parameters": t.get("input_schema", {})}} for t in body.get("tools", [])] if body.get("tools") else None,
-            "model_params": model_params
+            "model_params": model_params,
+            "stream_options": {"include_usage": True}
         }
-
+        
         async def _internal_stream_gen():
             if not circuit_breaker.can_request():
                 yield f'event: content_block_start\ndata: {json.dumps({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": "Error: Circuit Breaker OPEN. Upstream service is temporarily unreachable."}})}\n\n'
                 return
 
             msg_id = f"msg_{uuid.uuid4().hex}"
+            start_time = time.time()
             input_tokens, output_tokens = 0, 0
             yield f'event: message_start\ndata: {json.dumps({"type": "message_start", "message": {"id": msg_id, "type": "message", "role": "assistant", "model": MODEL_NAME, "content": [], "stop_reason": None, "usage": {"input_tokens": 0, "output_tokens": 0}}})}\n\n'
 
@@ -562,7 +567,8 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
                                         input_tokens = usage.get("prompt_tokens", input_tokens)
                                         output_tokens = usage.get("completion_tokens", output_tokens)
 
-                                    choice = data.get("choices", [{}])[0]
+                                    choices = data.get("choices", [])
+                                    choice = choices[0] if choices else {}
                                     delta = choice.get("delta", {})
 
                                     # Handle Reasoning / Thinking Content (OpenAI reasoning_content → Anthropic thinking block)
@@ -676,6 +682,10 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             yield f'event: message_delta\ndata: {json.dumps({"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None}, "usage": {"input_tokens": input_tokens, "output_tokens": output_tokens}})}\n\n'
             yield f'event: message_stop\ndata: {json.dumps({"type": "message_stop"})}\n\n'
 
+            duration_ms = (time.time() - start_time) * 1000
+            metrics_registry.increment_counter("bridge_latency_ms_total", duration_ms)
+            log_request_end(request_id, endpoint, method, 200, start_time, 0)
+
         async def stream_gen():
             global active_connections
             active_connections += 1
@@ -685,7 +695,7 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
             finally:
                 active_connections -= 1
 
-        return StreamingResponse(stream_gen(), media_type="text/event-stream")
+        return StreamingResponse(stream_gen(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
     except Exception as e:
         log_error(request_id, endpoint, method, f"Fatal Proxy Error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
