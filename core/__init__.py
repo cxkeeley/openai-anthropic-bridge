@@ -9,6 +9,7 @@ This package contains the modular components of the bridge:
 from .persona import EXPERT_PERSONA
 from .transformers import robust_parse_args, merge_messages, SSEParser, validate_tool_call_id, generate_tool_call_id
 from .security import NetworkCircuitBreaker, RateLimiter
+from .logger import ChimeraLogger
 
 __all__ = [
     "EXPERT_PERSONA",
@@ -17,4 +18,7 @@ __all__ = [
     "robust_parse_args",
     "merge_messages",
     "SSEParser",
+    "validate_tool_call_id",
+    "generate_tool_call_id",
+    "ChimeraLogger"
 ]

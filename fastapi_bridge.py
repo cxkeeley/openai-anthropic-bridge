@@ -29,8 +29,7 @@ import asyncio
 # Import from core package
 from core import EXPERT_PERSONA
 from core import NetworkCircuitBreaker, RateLimiter
-from core import robust_parse_args, merge_messages, SSEParser, validate_tool_call_id, generate_tool_call_id
-from bridge_logging import ChimeraLogger
+from core import robust_parse_args, merge_messages, SSEParser, validate_tool_call_id, generate_tool_call_id, ChimeraLogger
 
 load_dotenv()
 

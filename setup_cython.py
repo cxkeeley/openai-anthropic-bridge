@@ -14,11 +14,11 @@ setup(
     ext_modules=cythonize(
         [
             "fastapi_bridge.py", 
-            "bridge_logging.py",
             "core/__init__.py",
             "core/persona.py",
             "core/transformers.py",
-            "core/security.py"
+            "core/security.py",
+            "core/logger.py"
         ],
         compiler_directives={'language_level': "3"}
     ),
