@@ -77,6 +77,12 @@ claude
 - `deploy.sh`: Automated production deployment and cleanup script.
 - `docker-compose.yml`: Infrastructure configuration with DNS stability fixes.
 
+## 🤖 Autonomous Development Insight
+
+This repository was co-engineered using **Claude Code** operating directly within a hardened local VM infrastructure. The seamless integration of the toolcall definitions and protocol streaming allowed the agent to autonomously execute machine-code compilation test loops via `setup_cython.py` and handle internal state tracking, leaving verifiable native commit signatures within the repository's history.
+
+this project can be successfull because of claude_code itself that show show to connect to all its neuron
+
 ## License
 
 This project is licensed under the MIT License.
