@@ -42,7 +42,7 @@ The recommended way to deploy is using the automated build script:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PORT` | Port to listen on | `57123` |
-| `BRIDGE_TARGET_URL` | Target JiuTian service URL | (Required) |
+| `BRIDGE_TARGET_URL` | Public or Private OpenAI-compatible service URL | (Required) |
 | `BRIDGE_TOKEN` | Authentication JWT token | (Required) |
 | `BRIDGE_MODEL` | Target model name | `jt_indonesia` |
 | `BRIDGE_UPSTREAM_TIMEOUT`| Timeout for upstream requests | `600.0` |
