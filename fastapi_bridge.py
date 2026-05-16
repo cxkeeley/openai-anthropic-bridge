@@ -379,27 +379,43 @@ async def proxy_handler(payload: AnthropicRequest, request: Request):
 
         body = payload.model_dump(mode='json')
         tools_list = {}
-        for t in body.get("tools", []):
-            tool_name = t.get("name", "")
-            if tool_name:
-                tools_list[tool_name.lower()] = tool_name
+        tools = body.get("tools", [])
+        if isinstance(tools, list):
+            for t in tools:
+                if isinstance(t, dict):
+                    tool_name = t.get("name", "")
+                    if tool_name:
+                        tools_list[tool_name.lower()] = tool_name
 
         raw_msgs = []
         for msg in body.get("messages", []):
             role, content = msg.get("role"), msg.get("content")
             if role == "assistant" and isinstance(content, list):
-                text = "".join(b["text"] for b in content if b.get("type") == "text")
-                calls = [{"id": b["id"], "type": "function", "function": {"name": b["name"], "arguments": json.dumps(b["input"])}} for b in content if b.get("type") == "tool_use"]
+                text = "".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text")
+                calls = []
+                for b in content:
+                    if isinstance(b, dict) and b.get("type") == "tool_use":
+                        calls.append({
+                            "id": b.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": b.get("name", ""),
+                                "arguments": json.dumps(b.get("input", {}))
+                            }
+                        })
                 m = {"role": "assistant", "content": text or None}
                 if calls: m["tool_calls"] = calls
                 raw_msgs.append(m); continue
             if role == "user" and isinstance(content, list):
                 for b in content:
+                    if not isinstance(b, dict): continue
                     if b.get("type") == "tool_result":
                         c = b.get("content", "")
-                        if isinstance(c, list): c = "\n".join(p.get("text", "") for p in c if p.get("type") == "text")
-                        raw_msgs.append({"role": "tool", "tool_call_id": b["tool_use_id"], "content": str(c)})
-                    elif b.get("type") == "text": raw_msgs.append({"role": "user", "content": b["text"]})
+                        if isinstance(c, list): 
+                            c = "\n".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+                        raw_msgs.append({"role": "tool", "tool_call_id": b.get("tool_use_id", ""), "content": str(c)})
+                    elif b.get("type") == "text": 
+                        raw_msgs.append({"role": "user", "content": b.get("text", "")})
                 continue
             raw_msgs.append({"role": role, "content": content})
 
